@@ -137,8 +137,9 @@ function toolCall(session, name, args, id) {
   return { call, result };
 }
 
-/** 三个边界调用。 */
-const create = (session, id) => toolCall(session, "tree_task_create", { title: "目标" }, id);
+/** 三个边界调用：新建目标（`tree_task_plan` 不填 parentId）、追加子节点、完成。 */
+const create = (session, id) =>
+  toolCall(session, "tree_task_plan", { title: "目标", children: [{ title: "任务" }] }, id);
 const plan = (session, id) => toolCall(session, "tree_task_plan", { parentId: "g-1" }, id);
 const done = (session, id) => toolCall(session, "tree_task_done", { id: "s-1", result: "结果" }, id);
 
@@ -453,6 +454,9 @@ console.log("\n场景 11 · 分阶段推进：plan 不是边界，上次 done �
   check("阶段 B：区间覆盖 plan 的调用与返回",
     range !== null && range.shadowed.includes(p.call) && range.shadowed.includes(p.result),
     `range=${JSON.stringify(range)}`);
+  check("阶段 B：起点不是那次**追加子节点**的 plan（否则它前面那几条永远收不走）",
+    range !== null && range.from !== session.live().indexOf(p.result) + 1,
+    `from=${range?.from} plan结果=${session.live().indexOf(p.result)}`);
 
   const folded = foldOnce(ctx, session);
   const after = session.live();

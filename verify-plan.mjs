@@ -7,7 +7,7 @@
  * 跑法：`node verify-plan.mjs`。
  */
 
-import { addChildren, addGoal, activePath, checkpointOf, complete, createPlan, doneNotice, doneReply, dropNode, findNode, goalsOf, levelLabel, renderContinue, renderTree, updateNode } from "./lib/plan.js";
+import { addChildren, addGoal, activePath, checkpointOf, complete, createPlan, doneNotice, doneReply, dropNode, findNode, goalsOf, levelLabel, renderContinue, renderGoal, renderTree, updateNode } from "./lib/plan.js";
 
 let pass = 0;
 const failures = [];
@@ -449,7 +449,7 @@ console.log("\n场景 9 · 渲染");
 
 check("没有计划时给出引导而不是抛错", () => {
   const text = renderTree(null);
-  return typeof text === "string" && text.includes("tree_task_create");
+  return typeof text === "string" && text.includes("tree_task_plan");
 });
 
 check("树里带上关键节点的 id 与标题", () => {
@@ -478,18 +478,106 @@ check("当前节点带「← 当前」标记", () => {
   return text.includes(a1.id) && text.includes("← 当前");
 });
 
-check("结果只取首行", () => {
+check("结果多行时逐行原样给出", () => {
   const { plan, a1 } = fixture();
   complete(plan, a1.id, "第一行\n第二行");
   const text = renderTree(plan);
-  return text.includes("第一行") && !text.includes("第二行");
+  return text.includes("第一行") && text.includes("第二行");
 });
 
-check("结果超长时截断", () => {
+check("结果超长时**不**截断", () => {
   const { plan, a1 } = fixture();
-  complete(plan, a1.id, "x".repeat(300));
+  const long = "x".repeat(300);
+  complete(plan, a1.id, long);
   const text = renderTree(plan);
-  return text.includes("…") && !text.includes("x".repeat(200));
+  return text.includes(long) && !text.includes("…");
+});
+
+check("树是规范的 Markdown 嵌套任务清单", () => {
+  const { plan, a1 } = fixture();
+  complete(plan, a1.id, "A1 的结果");
+  const text = renderTree(plan);
+  const lines = text.split("\n");
+  return (
+    lines[0].startsWith("- [ ] **目标** `") &&
+    lines.some((line) => line.startsWith("  - [ ] **任务** `")) &&
+    lines.some((line) => line.startsWith("    - [ ] **子任务** `")) &&
+    lines.some((line) => line.startsWith("      - **结果**：A1 的结果"))
+  );
+});
+
+check("多行结果续行缩进到条目内容列", () => {
+  const { plan, a1 } = fixture();
+  complete(plan, a1.id, "第一行\n第二行");
+  const lines = renderTree(plan).split("\n");
+  const first = lines.findIndex((line) => line.includes("**结果**：第一行"));
+  return first !== -1 && lines[first + 1] === "        第二行";
+});
+
+check("默认把已结束的目标收成目标一级", () => {
+  const { plan, goal, taskA, a1, a2 } = fixture();
+  complete(plan, a1.id, "A1");
+  complete(plan, a2.id, "A2");
+  complete(plan, taskA.id, "任务A");
+  complete(plan, goal.id, "目标完成了");
+  const text = renderTree(plan);
+  return (
+    text.includes(`**目标** \`${goal.id}\``) &&
+    text.includes("目标完成了") &&
+    !text.includes("**任务**") &&
+    !text.includes(taskA.title)
+  );
+});
+
+check("指名目标 id 时把它的完整树展开", () => {
+  const { plan, goal, taskA, a1, a2 } = fixture();
+  complete(plan, a1.id, "A1");
+  complete(plan, a2.id, "A2");
+  complete(plan, taskA.id, "任务A");
+  complete(plan, goal.id, "目标完成了");
+  const text = renderTree(plan, goal.id);
+  return (
+    text.includes(`**目标** \`${goal.id}\``) &&
+    text.includes(`**任务** \`${taskA.id}\``) &&
+    text.includes("A1") &&
+    text.includes("A2")
+  );
+});
+
+check("指名时给任务 id 也按它所在的目标展开", () => {
+  const { plan, goal, taskA, a1, a2 } = fixture();
+  complete(plan, a1.id, "A1");
+  complete(plan, a2.id, "A2");
+  const text = renderTree(plan, a1.id);
+  return text.includes(`**目标** \`${goal.id}\``) && text.includes(`**子任务** \`${a1.id}\``);
+});
+
+check("指名一个不存在的 id 时给出明确说明", () => {
+  const { plan } = fixture();
+  const text = renderTree(plan, "g-不存在");
+  return text.includes("找不到节点") && !text.includes("**目标**");
+});
+
+check("renderGoal(expand=false) 只给目标那一级", () => {
+  const { plan, goal } = fixture();
+  const text = renderGoal(goal, plan, false);
+  return text.startsWith("- [ ] **目标**") && !text.includes("**任务**");
+});
+
+check("层级缩进恰好每层两个空格", () => {
+  const { plan, a1 } = fixture();
+  complete(plan, a1.id, "A1 的结果");
+  const lines = renderTree(plan).split("\n");
+  const goalLine = lines.find((line) => line.includes("**目标**"));
+  const taskLine = lines.find((line) => line.includes("**任务**"));
+  const stepLine = lines.find((line) => line.includes("**子任务**"));
+  const stepResult = lines.find((line) => line.includes("**结果**") && line.includes("A1 的结果"));
+  return (
+    goalLine.startsWith("- ") &&
+    taskLine.startsWith("  - ") &&
+    stepLine.startsWith("    - ") &&
+    stepResult.startsWith("      - ")
+  );
 });
 
 check("还没拆子节点的任务给出提示", () => {
@@ -665,9 +753,9 @@ check("树渲染把两个目标都列出来", () => {
   const second = addGoal(plan, { title: "第二个目标", tasks: [{ title: "任务C" }] });
   const text = renderTree(plan);
   return (
-    text.includes(`目标  ${goal.id}  ${goal.title}`) &&
-    text.includes(`目标  ${second.id}  ${second.title}`) &&
-    text.split("\n").filter((line) => line.includes("目标  ")).length === 2
+    text.includes(`**目标** \`${goal.id}\` ${goal.title}`) &&
+    text.includes(`**目标** \`${second.id}\` ${second.title}`) &&
+    text.split("\n").filter((line) => line.includes("**目标**")).length === 2
   );
 });
 
