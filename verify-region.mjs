@@ -526,6 +526,35 @@ console.log("\n场景 12 · 两次 done 紧邻：区间为空，什么都不注�
     `surface = ${JSON.stringify(session.live())}`);
 }
 
+// ---------------------------------------------------------------- 场景 14
+
+console.log("\n场景 14 · 老会话表层上的 tree_task_create 仍认作起点");
+{
+  const session = makeSession();
+  boot(session);
+  // 改名前的调用：工具名是 tree_task_create，实参是 title + tasks（没有 parentId）。
+  const legacy = toolCall(session, "tree_task_create", { title: "目标", tasks: [{ title: "任务" }] }, "lc1");
+  work(session, 2);
+  const d = done(session, "d1");
+
+  const range = foldRange(session);
+  check("区间起点仍在老的那次建目标调用之后",
+    range !== null && range.from === session.live().indexOf(legacy.result) + 1,
+    `range=${JSON.stringify(range)} surface=${JSON.stringify(session.live())}`);
+  check("老调用与这次 done 的调用返回都还在",
+    range !== null && range.to === session.live().indexOf(d.call) - 1,
+    `range=${JSON.stringify(range)}`);
+
+  const folded = foldOnce(ctx, session);
+  const after = session.live();
+  check("照折，收走那 4 条过程",
+    folded === true && lastNotice(session)?.text === "tree_task消息：隐藏了4条过程上下文。",
+    JSON.stringify(lastNotice(session)?.text));
+  check("老调用与 done 的调用返回都没被动",
+    after.includes(legacy.call) && after.includes(legacy.result) && after.includes(d.call) && after.includes(d.result),
+    `surface = ${JSON.stringify(after)}`);
+}
+
 // ---------------------------------------------------------------- 汇总
 
 console.log(`\n${"─".repeat(60)}`);
