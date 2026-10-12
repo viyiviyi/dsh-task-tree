@@ -5,14 +5,18 @@
  *
  *   1. **网络类**（`turn/end.reason.kind === 'error'` 且码属于传输类）→ 中断后
  *      第 1、5、10、30 分钟各拉一次；`QUOTA` 不拉（等再久也不会好）。
- *   2. **工具类**（本轮出现 `TOOL_OUTCOME_UNKNOWN` / `TOOL_NOT_STARTED` 合成结果，
- *      或 `MALFORMED_RESPONSE`）→ 立刻拉一次；再中同一类就把
- *      「拉起消息 + 那条 assistant 消息 + 合成错误结果」一起收走再来一次；第三次停手。
- *   3. **一条链只跑一遍**：时刻表用完标 `exhausted`，新错误不再开链；
+ *   2. **工具类**（本轮出现 `TOOL_OUTCOME_UNKNOWN` / `TOOL_NOT_STARTED` 合成结果）→
+ *      立刻拉一次；再中同一类就把「拉起消息 + 那条 assistant 消息 + 合成错误结果」
+ *      一起收走再来一次；第三次停手。
+ *   3. **输出类**（`MALFORMED_RESPONSE`：模型给出的工具调用参数不是合法 JSON，整条响应
+ *      被 DSH 作废）→ 立刻拉一次；再失败**不收走**（一个工具都没执行，没有东西可收）
+ *      直接再拉一次；第三次停手。提示词必须说清「没有任何工具被执行」，不能说
+ *      「结果未知、先确认影响」。
+ *   4. **一条链只跑一遍**：时刻表用完标 `exhausted`，新错误不再开链；
  *      真人一发消息就清链。
- *   4. 安全阀：暂停 / 停止 / 没计划 / 计划结束 / agent 不空闲，一律不拉；
+ *   5. 安全阀：暂停 / 停止 / 没计划 / 计划结束 / agent 不空闲，一律不拉；
  *      `aborted` 与正常收尾都把链清掉。
- *   5. 链落盘，跨重启在 `agent/status` 变 idle 时重新排上。
+ *   6. 链落盘，跨重启在 `agent/status` 变 idle 时重新排上。
  *
  * 假 ctx 提供 `on` / `get('agents')` / `logger`；假 agent 记下 followup；
  * 假 session 复刻 DSH surface 的 replace 硬规则（`sourceEventSeqs` 必须覆盖
@@ -198,8 +202,10 @@ try {
     classifyInterrupt({ kind: "error", error: { code: "QUOTA" } }) === null,
   );
   check(
-    "error/MALFORMED_RESPONSE 归工具类",
-    classifyInterrupt({ kind: "error", error: { code: "MALFORMED_RESPONSE" } })?.class === "tool",
+    "error/MALFORMED_RESPONSE 单归输出类（不是工具类）",
+    classifyInterrupt({ kind: "error", error: { code: "MALFORMED_RESPONSE" } })?.class === "malformed" &&
+      classifyInterrupt({ kind: "error", error: { code: "MALFORMED_RESPONSE" } })?.code === "MALFORMED_RESPONSE",
+    JSON.stringify(classifyInterrupt({ kind: "error", error: { code: "MALFORMED_RESPONSE" } })),
   );
   check("error 没有 code 时不管", classifyInterrupt({ kind: "error", error: {} }) === null);
   for (const code of SYNTHETIC_TOOL_CODES) {
@@ -513,16 +519,69 @@ try {
   check("第三次停手，不再拉", toolSetup.agent.followed.length === 2, String(toolSetup.agent.followed.length));
   check("停手记在链上", store.readRevive(tool)?.exhausted === true);
 
-  // MALFORMED_RESPONSE 也走工具类那条路。
+  // ------------------------------------------------------------ 输出类
+
+  console.log("\n输出类（MALFORMED_RESPONSE）：立刻一次 + 什么都不收再来一次 + 停手");
+
   const malformed = "s-malformed";
   const malformedSetup = setup(malformed);
-  await malformedSetup.ctx.fire("session/event", makeSession(malformed), {
+  const malformedSession = makeSession(malformed);
+  await malformedSetup.ctx.fire("session/event", malformedSession, {
     type: "turn/end",
     data: { turn: 1, reason: { kind: "error", error: { code: "MALFORMED_RESPONSE" } } },
   });
-  check("MALFORMED_RESPONSE 建的是工具类的链", store.readRevive(malformed)?.class === "tool");
+  check(
+    "MALFORMED_RESPONSE 建的是输出类的链",
+    store.readRevive(malformed)?.class === "malformed",
+    JSON.stringify(store.readRevive(malformed)),
+  );
+  check("turn/end 那一刻还没空闲，先不推", malformedSetup.agent.followed.length === 0);
   await malformedSetup.ctx.fire("agent/status", { agent: malformedSetup.agent, status: "idle" });
-  check("MALFORMED_RESPONSE 同样立刻拉起", malformedSetup.agent.followed.length === 1);
+  check("agent 一空闲就拉起来", malformedSetup.agent.followed.length === 1, String(malformedSetup.agent.followed.length));
+  const malformedText = textOf(malformedSetup.agent.followed[0]);
+  check("正文说清「没有任何工具被执行」", malformedText.includes("没有任何工具被执行"), malformedText.slice(0, 140));
+  check("正文不说「做没做没人知道」", !malformedText.includes("做没做没人知道"), malformedText.slice(0, 140));
+  check("正文也不劝「不要盲目重试」", !malformedText.includes("不要盲目重试"), malformedText.slice(0, 140));
+
+  // 第二次：没有合成结果可定位，所以一条都不该被收走，只再拉一次。
+  malformedSession.push("user/message", {
+    id: "tt-revive-s-malformed-x",
+    role: "user",
+    content: [{ type: "text", text: "tree_task消息：…" }],
+    source: { kind: PLUGIN_SOURCE_KIND, form: "notice", summary: REVIVE_SUMMARY },
+  });
+  const malformedNodesBefore = malformedSession.live().length;
+  await malformedSetup.ctx.fire("session/event", malformedSession, {
+    type: "turn/end",
+    data: { turn: 3, reason: { kind: "error", error: { code: "MALFORMED_RESPONSE" } } },
+  });
+  check(
+    "第二次中断什么都不收走",
+    malformedSession.live().length === malformedNodesBefore,
+    `nodes=${malformedSession.live().length} before=${malformedNodesBefore}`,
+  );
+  check("链上如实记着没做收走", store.readRevive(malformed)?.hidden === false, JSON.stringify(store.readRevive(malformed)));
+  await malformedSetup.ctx.fire("agent/status", { agent: malformedSetup.agent, status: "idle" });
+  check(
+    "没有东西可收也照样再拉一次",
+    malformedSetup.agent.followed.length === 2,
+    String(malformedSetup.agent.followed.length),
+  );
+
+  // 第三次：停手，不再重复告警。
+  await malformedSetup.ctx.fire("session/event", malformedSession, {
+    type: "turn/end",
+    data: { turn: 5, reason: { kind: "error", error: { code: "MALFORMED_RESPONSE" } } },
+  });
+  await malformedSetup.ctx.fire("agent/status", { agent: malformedSetup.agent, status: "idle" });
+  check("第三次停手，不再拉", malformedSetup.agent.followed.length === 2, String(malformedSetup.agent.followed.length));
+  check("停手记在链上", store.readRevive(malformed)?.exhausted === true);
+  const warnsBefore = malformedSetup.ctx.logs.length;
+  await malformedSetup.ctx.fire("session/event", malformedSession, {
+    type: "turn/end",
+    data: { turn: 7, reason: { kind: "error", error: { code: "MALFORMED_RESPONSE" } } },
+  });
+  check("停手之后不再重复告警", malformedSetup.ctx.logs.length === warnsBefore, `${malformedSetup.ctx.logs.length} vs ${warnsBefore}`);
 
   // ------------------------------------------------------------ aborted
 

@@ -329,26 +329,38 @@ import 任何 `@deepseek-ai/*` 运行时模块都会在加载时直接炸掉。
 §8.1 只看"agent 空没空"，不看"这一轮是怎么结束的"——网络断了、工具执行到一半进程没了，
 这两种停法它要么不管，要么只会盲目再推一把。`lib/interrupt.js` 专门认这两类。
 
-**两类中断，判据都是 DSH 自己写的死数据**（`turn/end` 的 `reason`，以及工具结果里的
+**三类中断，判据都是 DSH 自己写的死数据**（`turn/end` 的 `reason`，以及工具结果里的
 `error.code`），不是猜文本：
 
 | 类别 | 判据 | 节奏 |
 |---|---|---|
-| 网络 / API | `turn/end` 的 `reason.kind === 'error'` 且 `code` ∈ `TRANSPORT` `TIMEOUT` `SERVER` `RATE_LIMIT` `EMPTY_RESPONSE`（外加模型吐坏 JSON 的 `MALFORMED_RESPONSE`） | 中断后第 1、5、10、30 分钟各一次 |
+| 网络 / API | `turn/end` 的 `reason.kind === 'error'` 且 `code` ∈ `TRANSPORT` `TIMEOUT` `SERVER` `RATE_LIMIT` `EMPTY_RESPONSE` | 中断后第 1、5、10、30 分钟各一次 |
+| 模型输出损坏 | `reason.kind === 'error'` 且 `code === 'MALFORMED_RESPONSE'` | 立即一次 |
 | 工具执行 | 本轮出现过 `TOOL_OUTCOME_UNKNOWN` / `TOOL_NOT_STARTED` 的**合成** tool/result（`turn/end` 此时是 `interrupted`） | 立即一次 |
 
 - **`QUOTA` 不拉。** 402 余额不足等再久也不会自己好，拉起只是白推消息。
 - **`isError` 不能当判据。** 实测全量工具错误 800+ 次，绝大多数是
   `FS_STALE_VERSION`、`FS_EDIT_NOT_FOUND`、`WEB_BLOCKED_URL` 这类模型自己能改道的，
-  它们不中断这一轮。真正停住的是第二种：**工具调用没有留下真实结果**——DSH 在会话重载时
+  它们不中断这一轮。真正停住的是第三类：**工具调用没有留下真实结果**——DSH 在会话重载时
   由崩溃修复（`dsh-session/lib/types/repair.js`）补一条合成错误，意思是"它的结果未知，
   别盲目重试"。
+- **`MALFORMED_RESPONSE` 为什么不并进工具类。** 它由 DSH 的 DeepSeek 适配器在解析
+  响应流时抛出（`dsh-llm-deepseek/lib/index.js` 的 `translate()`：收到 `message_stop`
+  后对每个 tool-call 块 `JSON.parse` 拼接好的 `partial_json`，失败即 `malformed`）。
+  这意味着**整条响应被作废**：一个工具都没执行、连 `tool/call` 都没落盘、没有任何副作用。
+  按工具类的话术拉起（"先确认那一步的实际影响"）会把模型引去勘察一个不存在的副作用，
+  而收走逻辑本来靠合成错误结果定位区间，在这里找不到对象。所以它单独一类，自己一套话术、
+  不收走任何东西。另外 DSH 自己的重试策略（`dsh-llm/lib/types/retry-policy.js` 的
+  `DEFAULT_RETRYABLE_CODES`）默认不含这个码，宿主不会先快速重试一轮，插件的这次拉起就是
+  唯一的补救。
 - **用户按下停止（`aborted`）永不拉起**，与 §8.1 的第 2 条闸门一致。
 
-**收走再拉一次。** 工具类中断拉起后如果**又**因为同样原因停住，说明上下文里那个工具调用
-本身在把事情往回带：这时把「那条拉起消息 + 发起该调用的 assistant 消息 + 它的合成错误结果」
-整段用 `surfaceOp: replace` 收走，再拉一次；第三次同类中断就停手
-（链上记 `exhausted`）。收走用的是折叠同一套机制，界面上仍可展开、日志不删。
+**收走再拉一次（只适用于工具类）。** 工具类中断拉起后如果**又**因为同样原因停住，
+说明上下文里那个工具调用本身在把事情往回带：这时把「那条拉起消息 + 发起该调用的
+assistant 消息 + 它的合成错误结果」整段用 `surfaceOp: replace` 收走，再拉一次；
+模型输出损坏类没有对象可收，第二次失败就是**原样再拉一次**，链上 `hidden` 如实记 `false`。
+两类都是第三次同类中断停手（链上记 `exhausted`）。收走用的是折叠同一套机制，界面上仍可
+展开、日志不删。
 
 **状态落盘**（`revive/<sessionId>.json`）：时刻表要跨 30 分钟，进程重启不能把等待丢掉。
 重启后等这个会话再次 `idle`，把还没到期的时刻重新排上，已经过期的丢弃。
