@@ -244,7 +244,7 @@ check(
   String(notice?.data?.source?.plugin),
 );
 check("提示的 source.form 是 notice", notice?.data?.source?.form === "notice");
-check("提示带一行摘要", typeof notice?.data?.source?.summary === "string" && notice.data.source.summary.length > 0);
+check("提示带一行摘要，且带统一前缀", notice?.data?.source?.summary === "树形任务流 · 上下文被压缩，计划树仍在", String(notice?.data?.source?.summary));
 check("提示带 surfaceOp: append", notice?.surfaceOp === "append");
 check(
   "提示是追加到表层末尾，不是替换",

@@ -203,6 +203,9 @@ console.log("\n场景 1 · 起点取「上次 done 之后的第一个 create/pla
   check("确实折了", folded === true && notice !== null, JSON.stringify(after));
   check("收走 create 与 done 之间的 12 条（过程 + plan + 过程）",
     notice.text === "tree_task消息：隐藏了12条过程上下文。", JSON.stringify(notice.text));
+  check("界面上那一行的摘要带「树形任务流 · 」前缀",
+    session.eventAt(notice.seq)?.data?.source?.summary === "树形任务流 · 隐藏了12条过程上下文",
+    String(session.eventAt(notice.seq)?.data?.source?.summary));
   check("create 与 done 的调用与返回都还在",
     [c, d].every((each) => after.includes(each.call) && after.includes(each.result)),
     `surface = ${JSON.stringify(after)}`);

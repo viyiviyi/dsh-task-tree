@@ -366,9 +366,9 @@ console.log("\n跨重启的那次继续：把 idle 会话推起来：");
 
     check("推了一次", outcome.woke === true && agents.followed.length === 1);
     check(
-      "推的是插件自己的「恢复续行」消息",
+      "推的是插件自己的「恢复续行」消息，摘要带统一前缀",
       agents.followed[0]?.message?.source?.kind === "plugin:dsh-tree-task-flow" &&
-        agents.followed[0]?.message?.source?.summary === "恢复续行",
+        agents.followed[0]?.message?.source?.summary === "树形任务流 · 恢复续行",
       JSON.stringify(agents.followed[0]?.message?.source),
     );
     check(

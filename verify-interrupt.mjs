@@ -38,7 +38,7 @@ import {
   registerInterruptRecovery,
 } from "./lib/interrupt.js";
 import { addChildren, createPlan } from "./lib/plan.js";
-import { PLUGIN_SOURCE_KIND, isPluginSource } from "./lib/region.js";
+import { PLUGIN_SOURCE_KIND, hasSummary, isPluginSource, noticeSummary } from "./lib/region.js";
 import { createStore } from "./lib/store.js";
 
 let pass = 0;
@@ -254,7 +254,12 @@ try {
   fireTimers();
   check("到点拉起一次", netSetup.agent.followed.length === 1, String(netSetup.agent.followed.length));
   const reviveMessage = netSetup.agent.followed[0];
-  check("拉起的 source 摘要能被认出来", reviveMessage?.source?.summary === REVIVE_SUMMARY);
+  check("拉起的 source 摘要能被认出来", hasSummary(reviveMessage?.source, REVIVE_SUMMARY));
+  check(
+    "拉起的 source 摘要带上了「树形任务流 · 」前缀",
+    reviveMessage?.source?.summary === noticeSummary(REVIVE_SUMMARY),
+    String(reviveMessage?.source?.summary),
+  );
   check(
     "拉起的 source 是生产者自有的 kind（v4 会话才收）",
     reviveMessage?.source?.kind === "plugin:dsh-tree-task-flow",
@@ -462,7 +467,7 @@ try {
     id: "tt-revive-s-tool-x",
     role: "user",
     content: [{ type: "text", text: "tree_task消息：…" }],
-    source: { kind: PLUGIN_SOURCE_KIND, form: "notice", summary: REVIVE_SUMMARY },
+    source: { kind: PLUGIN_SOURCE_KIND, form: "notice", summary: noticeSummary(REVIVE_SUMMARY) },
   });
   const nodesBefore = toolSession.live().length;
 
@@ -488,7 +493,11 @@ try {
   );
   check("收走用的是 replace，不是追加", hiddenNodes.length < nodesBefore);
   const hiddenEvent = toolSession.eventAt(hiddenNodes[hiddenNodes.length - 1]);
-  check("落下的那条是折叠通告", hiddenEvent?.data?.source?.summary === HIDE_SUMMARY, String(hiddenEvent?.data?.source?.summary));
+  check(
+    "落下的那条是折叠通告，且摘要带统一前缀",
+    hiddenEvent?.data?.source?.summary === noticeSummary(HIDE_SUMMARY),
+    String(hiddenEvent?.data?.source?.summary),
+  );
   check(
     "被收走的范围正好是 assistant + 合成结果 + 拉起消息",
     Array.isArray(hiddenEvent?.sourceEventSeqs) &&
@@ -548,7 +557,7 @@ try {
     id: "tt-revive-s-malformed-x",
     role: "user",
     content: [{ type: "text", text: "tree_task消息：…" }],
-    source: { kind: PLUGIN_SOURCE_KIND, form: "notice", summary: REVIVE_SUMMARY },
+    source: { kind: PLUGIN_SOURCE_KIND, form: "notice", summary: noticeSummary(REVIVE_SUMMARY) },
   });
   const malformedNodesBefore = malformedSession.live().length;
   await malformedSetup.ctx.fire("session/event", malformedSession, {

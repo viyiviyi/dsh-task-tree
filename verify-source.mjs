@@ -31,6 +31,7 @@ import { pathToFileURL } from "node:url";
 import {
   PLUGIN,
   PLUGIN_SOURCE_KIND,
+  hasSummary,
   isPluginSource,
   pluginSource,
   summaryMessage,
@@ -64,7 +65,16 @@ const source = pluginSource("一行摘要");
 check("pluginSource 的 kind 是 PLUGIN_SOURCE_KIND", source.kind === PLUGIN_SOURCE_KIND, String(source.kind));
 check("pluginSource 不再带老写法的 plugin 字段", source.plugin === undefined, String(source.plugin));
 check("pluginSource 保留 form: notice", source.form === "notice", String(source.form));
-check("pluginSource 保留 summary", source.summary === "一行摘要", String(source.summary));
+check(
+  "pluginSource 给摘要加上「树形任务流 · 」前缀",
+  source.summary === "树形任务流 · 一行摘要",
+  String(source.summary),
+);
+check(
+  "hasSummary 对带前缀与不带前缀的老消息都认",
+  hasSummary(source, "一行摘要") && hasSummary({ summary: "一行摘要" }, "一行摘要") &&
+    !hasSummary({ summary: "别家的通知" }, "一行摘要"),
+);
 
 const notice = summaryMessage("tt-x-1", "tree_task消息：正文", "一行摘要");
 check("summaryMessage 的 source 与 pluginSource 同形", notice.source.kind === PLUGIN_SOURCE_KIND, String(notice.source.kind));
