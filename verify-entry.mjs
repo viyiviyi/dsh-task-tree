@@ -317,6 +317,21 @@ check(
 
 console.log("\n默认态（安装即启用，不给 config）：");
 check("enabled 默认是 true", DEFAULT_CONFIG.enabled === true, String(DEFAULT_CONFIG.enabled));
+check(
+  "autoContinue 默认是 true（没有配置界面，功能就不能默认关）",
+  DEFAULT_CONFIG.autoContinue === true,
+  String(DEFAULT_CONFIG.autoContinue),
+);
+check(
+  "interruptRecovery 默认是 true",
+  DEFAULT_CONFIG.interruptRecovery === true,
+  String(DEFAULT_CONFIG.interruptRecovery),
+);
+check(
+  "默认配置里没有任何一个布尔开关是关着的",
+  Object.entries(DEFAULT_CONFIG).every(([key, value]) => (typeof value === "boolean" ? value === true : true)),
+  JSON.stringify(DEFAULT_CONFIG),
+);
 
 // 用户装完不做任何配置，走的就是这条路。它必须和显式 enabled:true 等价，
 // 否则"安装即启用"就只是 README 里的一句话。

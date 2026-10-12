@@ -11,11 +11,15 @@
 # ⚠️ 同 id 的 config 是**整体替换**，不是逐字段深合并——覆盖时要把需要的
 #    字段一次写全。可覆盖的字段见 DEFAULT_CONFIG：
 #
-#   enabled            总开关                          默认 true（写 false 关掉）
-#   autoContinue       是否允许自动续行                默认 false（开着会让人停不下来）
-#   maxAutoRounds      连续自动续行轮次上限            默认 5
-#   promptOrder        工具说明段顺序                  默认 1800
-#   rootDir            插件状态目录                    默认 $DSH_HOME/dsh-task-tree
+#   enabled             总开关                  默认 true（写 false 关掉）
+#   autoContinue        是否允许自动续行        默认 true
+#   maxAutoRounds       连续自动续行轮次上限    默认 5
+#   interruptRecovery   意外中断是否自动拉起    默认 true
+#   interruptDelaysMs   网络类中断拉起时刻      默认 null（= 1/5/10/30 分钟）
+#   promptOrder         工具说明段顺序          默认 1800
+#   rootDir             插件状态目录            默认 $DSH_HOME/dsh-task-tree
+#
+# 默认值一律是"开"。插件还没有配置界面，功能默认关等于这个功能不存在。
 - insert:
     - id: task-tree
       name: 'dsh-tree-task-flow'
