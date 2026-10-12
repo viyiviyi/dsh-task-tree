@@ -320,7 +320,7 @@ import 任何 `@deepseek-ai/*` 运行时模块都会在加载时直接炸掉。
 
 | # | 闸门 | 作用 |
 |---|---|---|
-| 1 | 中断即停 | 用户按下停止（`signal.aborted`）后这个会话不再被自动唤起（落盘 `held/stopped`，跨重启有效），直到真人再发消息 |
+| 1 | 中断即停 | 用户按下停止后这个会话不再被自动唤起（落盘 `held/stopped`，跨重启有效），直到真人再发消息。判据是**落盘的 `turn/end` `reason.kind === "aborted"`**，不是 `agent/turn-stopping` 的 `signal.aborted`——后者只在"这一轮本来就要正常收尾"时才发（唯一一处 dispatch 前面刚做过 `throwIfAborted()`），中止根本走不到那里，拿它当闸门等于没闸门 |
 | 2 | 轮次上限 | 连续续行达 `maxAutoRounds` 即停 |
 | 3 | 不抢排队输入 | `inbox.nextTurn` / `nextStep` 非空时让用户先说 |
 | 4 | 暂停压住它 | `pause()` 顺手调续行的 `stop()`，`resume()` 再放开 |
@@ -609,6 +609,10 @@ dsh-tree-task-flow/
 | `verify-region.mjs` | 起点与终点的取法（相邻两次 `done`、区间里没有 `create` 时的回退、`plan` 不再是边界且随过程收走）；含真人消息整段不折；区间为空不注入 |
 | `verify-plan.mjs` | 状态流转；连续结束合进一条汇总；自动完成与丢弃级联；渲染不抛错 |
 | `verify-pause.mjs` | 暂停闸门：暂停后挂住不调 `next`；继续后放行；取消信号立刻放行；真人发言自动解除；会话之间互不干扰 |
+| `verify-auto-continue.mjs` | 自动续行：空闲且有未完成子任务才推；**按下停止（`turn/end` 的 `aborted`）后绝不再推**，且状态落盘、跨重启有效；只有真人发言才解除并重置配额；正常收尾不设闸；轮次上限；不抢排队输入；关掉时一个字节都不推 |
+| `verify-compaction.mjs` | 压缩后提示：认出检查点、同一压缩点只提示一次、注入失败不改去重位置 |
+| `verify-source.mjs` | 消息 source 形状：只写 `plugin:<包名>`，读回来两种写法都认，摘要统一带「树形任务流 · 」前缀 |
+| `verify-interrupt.mjs` | 意外中断拉起：三类判据、时刻表、收走范围、安全阀 |
 | `verify-client.mjs` | 客户端条目：挂载点与 id；样式注入；中英文案键集一致；收起态／展开态／暂停态／空态各渲染一次（自带最小 window/document/React 替身，真物化一次 `client.js`） |
 
 `verify-region.mjs` 用假 session **忠实复刻**了上面 §11.1 的第 2～5 条，

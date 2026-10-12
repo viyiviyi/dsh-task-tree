@@ -325,8 +325,14 @@ dsh --profile web --dump-config          # 输出里应出现 task-tree 这一�
 
 开着也不会脱缰，有四道闸门：
 
-1. **中断即停**——你按下停止（`agent/turn-stopping` 且 `signal.aborted`），这个会话就被
-   标记为不再自动续行（落盘在 `held/` 下，跨重启有效），直到真人再发一条消息。
+1. **中断即停**——你按下停止，落盘的 `turn/end` 会记成 `reason.kind = "aborted"`，
+   插件从那里认，把这个会话标记为不再自动续行（落盘在 `held/` 下，跨重启有效），
+   直到真人再发一条消息。
+   > **这里不能用 `agent/turn-stopping` 的 `signal.aborted` 当判据。** 那个事件只在
+   > "这一轮本来就要正常收尾"时才发（`dsh-agent-loop` 里唯一一处 dispatch 前面刚做过
+   > `throwIfAborted()`）；你按停止会让信号 abort、从别处抛出，catch 里直接记下
+   > `turn/end` 就重新抛出，那条 dispatch 走不到——`signal.aborted` 在那里几乎永远是
+   > `false`，拿它当闸门等于没闸门。
 2. **轮次上限**——连续续行达到 `maxAutoRounds`（默认 5）就停；只有真人发的消息才重置配额。
 3. **不抢排队输入**——队列里还有你排着的话时，让用户先说。
 4. **暂停压住它**——`/task-tree pause` 之后，即使模型自己停了下来，兜底也不会把它拉起来；
