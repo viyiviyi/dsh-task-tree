@@ -20,6 +20,12 @@
     autoContinue: false
     # 连续自动续行的轮次上限，达到就停；只有真人发言才重置配额。
     maxAutoRounds: 5
+    # 意外中断后是否自动拉起（见 README「意外中断自动拉起」）。默认 true：
+    # 它只在「这一轮不是正常结束」时动手，正常停下不受影响。
+    interruptRecovery: true
+    # 网络/API 类中断的拉起时刻，单位毫秒，默认 [1分钟, 5分钟, 10分钟, 30分钟]；
+    # null 表示用内置默认值。工具执行中断不看这张表，它永远立即拉一次。
+    interruptDelaysMs: null
     # 工具说明段落的排序。1800 落在内置的 TOOL_PTY(1700) 与 TOOL_WEB_SEARCH(2000)
     # 之间的空档，不与任何内置段落撞号。
     promptOrder: 1800

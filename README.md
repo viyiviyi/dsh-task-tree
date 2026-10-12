@@ -219,8 +219,35 @@ dsh --profile web --dump-config          # 输出里应出现 task-tree 这一�
 | `enabled` | `true` | 总开关；**装上即启用**，写 `false` 关掉 |
 | `autoContinue` | `false` | 模型停下时是否自动续行 |
 | `maxAutoRounds` | `5` | 连续自动续行的轮次上限 |
+| `interruptRecovery` | `true` | 意外中断后是否自动拉起（见下节） |
+| `interruptDelaysMs` | `null` | 网络类中断的拉起时刻，`null` = 1/5/10/30 分钟 |
 | `promptOrder` | `1800` | 工具说明段落的排序 |
 | `rootDir` | `null` | 状态目录，默认 `$DSH_HOME/dsh-task-tree` |
+
+## 意外中断自动拉起
+
+上面那三个 `autoContinue` 闸门管的是"模型自己正常停下"。这一节管的是**这一轮没能正常
+结束**：网络断了、模型 API 报错、或者工具执行到一半进程没了。这两种停法插件原先不管，
+会话就一直躺在那里。
+
+判据全部取自 DSH 自己写下的数据，不看文本：
+
+| 中断 | 怎么认 | 什么时候拉起 |
+|---|---|---|
+| 网络 / API | `turn/end` 的原因是 `error`，错误码是 `TRANSPORT`、`TIMEOUT`、`SERVER`、`RATE_LIMIT`、`EMPTY_RESPONSE` 或 `MALFORMED_RESPONSE` | 中断后 **1 分钟、5 分钟、10 分钟、30 分钟**各一次 |
+| 工具执行 | 这一轮出现过 `TOOL_OUTCOME_UNKNOWN` / `TOOL_NOT_STARTED` 的合成工具结果（意思是"这次调用没留下结果"） | **立即**一次 |
+
+几条边界：
+
+- **余额不足（`QUOTA`）不拉。** 等再久也不会自己好。
+- **你按下的停止，永远不拉。** 和自动续行的第 2 条闸门一致。
+- **普通工具报错不拉。** 比如"文件没找到""edit 没匹配上""网址被拦"——这些模型看到就能
+  自己改道，本来也没中断这一轮。
+- **拉了还因为同样原因停住**：把那条拉起消息、那个工具调用所在的助手消息、以及它的
+  合成错误结果一起**收走**（和折叠同一套机制，界面上仍可展开），再拉一次；第三次同类
+  中断就停手。
+- 只在**这个会话的计划树还没走完**时才动手。等待时刻写在状态目录的 `revive/` 下，
+  重启 `dsh web` 不会丢。
 
 ## 暂停与继续
 
@@ -274,6 +301,8 @@ dsh --profile web --dump-config          # 输出里应出现 task-tree 这一�
 |---|---|
 | `plans/<sessionId>.json` | 计划树（每个会话一棵） |
 | `surfaces/<sessionId>.json` | 三层的进度游标 `{ key, cursor }`（只给界面看，不参与折叠） |
+| `held/<sessionId>.json` | 暂停 / 停止状态（跨重启保留） |
+| `revive/<sessionId>.json` | 意外中断的拉起时刻表（跨重启保留） |
 
 > 目录名沿用插件改名前的标识，为的是不让既有的计划文件失联；插件名与它无关。
 

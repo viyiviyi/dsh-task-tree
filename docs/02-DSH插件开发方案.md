@@ -298,6 +298,8 @@ import 任何 `@deepseek-ai/*` 运行时模块都会在加载时直接炸掉。
 
 ## 8. 自动续行
 
+### 8.1 常规续行兜底（autoContinue）
+
 `autoContinue` 默认关闭，开着也只是**兜底**：`tree_task_done` 的返回里已经带了
 "接下来需要进行…"或"检查点：…"，模型通常会在同一轮里接着做。这里兜的是模型仍然停下来的情况。
 
@@ -321,6 +323,38 @@ import 任何 `@deepseek-ai/*` 运行时模块都会在加载时直接炸掉。
 **暂停会一并压住它。** `pause()` 顺手调用续行的 `stop()`，否则模型刚停下、兜底就把它
 `followup` 拉起来了——人按了暂停却还在跑，那就不叫暂停。`resume()` 再放开。
 人按界面上的停止按钮走的是第 2 条闸门，与暂停是两回事（见 §9.4）。
+
+### 8.2 意外中断拉起（interruptRecovery）
+
+§8.1 只看"agent 空没空"，不看"这一轮是怎么结束的"——网络断了、工具执行到一半进程没了，
+这两种停法它要么不管，要么只会盲目再推一把。`lib/interrupt.js` 专门认这两类。
+
+**两类中断，判据都是 DSH 自己写的死数据**（`turn/end` 的 `reason`，以及工具结果里的
+`error.code`），不是猜文本：
+
+| 类别 | 判据 | 节奏 |
+|---|---|---|
+| 网络 / API | `turn/end` 的 `reason.kind === 'error'` 且 `code` ∈ `TRANSPORT` `TIMEOUT` `SERVER` `RATE_LIMIT` `EMPTY_RESPONSE`（外加模型吐坏 JSON 的 `MALFORMED_RESPONSE`） | 中断后第 1、5、10、30 分钟各一次 |
+| 工具执行 | 本轮出现过 `TOOL_OUTCOME_UNKNOWN` / `TOOL_NOT_STARTED` 的**合成** tool/result（`turn/end` 此时是 `interrupted`） | 立即一次 |
+
+- **`QUOTA` 不拉。** 402 余额不足等再久也不会自己好，拉起只是白推消息。
+- **`isError` 不能当判据。** 实测全量工具错误 800+ 次，绝大多数是
+  `FS_STALE_VERSION`、`FS_EDIT_NOT_FOUND`、`WEB_BLOCKED_URL` 这类模型自己能改道的，
+  它们不中断这一轮。真正停住的是第二种：**工具调用没有留下真实结果**——DSH 在会话重载时
+  由崩溃修复（`dsh-session/lib/types/repair.js`）补一条合成错误，意思是"它的结果未知，
+  别盲目重试"。
+- **用户按下停止（`aborted`）永不拉起**，与 §8.1 的第 2 条闸门一致。
+
+**收走再拉一次。** 工具类中断拉起后如果**又**因为同样原因停住，说明上下文里那个工具调用
+本身在把事情往回带：这时把「那条拉起消息 + 发起该调用的 assistant 消息 + 它的合成错误结果」
+整段用 `surfaceOp: replace` 收走，再拉一次；第三次同类中断就停手
+（链上记 `exhausted`）。收走用的是折叠同一套机制，界面上仍可展开、日志不删。
+
+**状态落盘**（`revive/<sessionId>.json`）：时刻表要跨 30 分钟，进程重启不能把等待丢掉。
+重启后等这个会话再次 `idle`，把还没到期的时刻重新排上，已经过期的丢弃。
+
+**和 §8.1 并存**，各管各的：`autoContinue` 管"模型自己停下的正常收尾"，本节管"这一轮
+异常结束"。两条都没开时插件一个字节都不碰会话。
 
 ---
 
@@ -480,13 +514,14 @@ dsh-tree-task-flow/
 ├─ lib/
 │  ├─ index.js           入口：配置兜底、默认启用/显式关闭两条装配路径
 │  ├─ plan.js            计划树纯逻辑：状态流转、activePath、checkpointOf、渲染
-│  ├─ store.js           状态读写：plans/ 与 surfaces/ 与 held/，原子写
+│  ├─ store.js           状态读写：plans/ 与 surfaces/ 与 held/ 与 revive/，原子写
 │  ├─ region.js          折叠：游标同步、折叠范围、汇总消息
 │  ├─ tools.js           六个工具
 │  ├─ prompt.js          系统提示词段落（不随计划变化）
 │  ├─ commands.js        /task-tree 命令
 │  ├─ http.js            条目的 HTTP 接口
 │  ├─ auto-continue.js   自动续行兜底
+│  ├─ interrupt.js       意外中断拉起：认 turn/end 的中断原因，按时刻表拉起，必要时收走再拉
 │  └─ pause.js           暂停闸门：挂在 agent/pre-step 上等人点继续；跨重启改用 followup 唤醒
 ├─ verify-*.mjs          自检（不随包发布，见 files 白名单）
 └─ docs/                 设计文档
