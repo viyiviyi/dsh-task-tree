@@ -137,9 +137,8 @@ function toolCall(session, name, args, id) {
   return { call, result };
 }
 
-/** 三个边界调用：新建目标（`tree_task_plan` 不填 parentId）、追加子节点、完成。 */
-const create = (session, id) =>
-  toolCall(session, "tree_task_plan", { title: "目标", children: [{ title: "任务" }] }, id);
+/** 三个边界调用。 */
+const create = (session, id) => toolCall(session, "tree_task_create", { title: "目标" }, id);
 const plan = (session, id) => toolCall(session, "tree_task_plan", { parentId: "g-1" }, id);
 const done = (session, id) => toolCall(session, "tree_task_done", { id: "s-1", result: "结果" }, id);
 
@@ -457,7 +456,6 @@ console.log("\n场景 11 · 分阶段推进：plan 不是边界，上次 done �
   check("阶段 B：起点不是那次**追加子节点**的 plan（否则它前面那几条永远收不走）",
     range !== null && range.from !== session.live().indexOf(p.result) + 1,
     `from=${range?.from} plan结果=${session.live().indexOf(p.result)}`);
-
   const folded = foldOnce(ctx, session);
   const after = session.live();
   check("阶段 B：收走 10 条（上次 done 之后的 4 条过程 + plan 的调用与返回 + 后面 4 条）",
@@ -528,30 +526,37 @@ console.log("\n场景 12 · 两次 done 紧邻：区间为空，什么都不注�
 
 // ---------------------------------------------------------------- 场景 14
 
-console.log("\n场景 14 · 老会话表层上的 tree_task_create 仍认作起点");
+console.log("\n场景 14 · 追加子节点的 plan 永远成不了起点");
 {
   const session = makeSession();
   boot(session);
-  // 改名前的调用：工具名是 tree_task_create，实参是 title + tasks（没有 parentId）。
-  const legacy = toolCall(session, "tree_task_create", { title: "目标", tasks: [{ title: "任务" }] }, "lc1");
-  work(session, 2);
-  const d = done(session, "d1");
+  const c = create(session, "c1");
+  work(session, 1);
+  const d1 = done(session, "d1");
+  foldOnce(ctx, session);
+
+  // 下一次 done 之前，先来一次"给任务补步骤"的 plan，再来一次。
+  const p1 = plan(session, "p1");
+  work(session, 1);
+  const p2 = plan(session, "p2");
+  work(session, 1);
+  const d2 = done(session, "d2");
 
   const range = foldRange(session);
-  check("区间起点仍在老的那次建目标调用之后",
-    range !== null && range.from === session.live().indexOf(legacy.result) + 1,
-    `range=${JSON.stringify(range)} surface=${JSON.stringify(session.live())}`);
-  check("老调用与这次 done 的调用返回都还在",
-    range !== null && range.to === session.live().indexOf(d.call) - 1,
+  check("起点回退到上次 done 的返回之后，而不是任何一次 plan",
+    range !== null && range.from === session.live().indexOf(d1.result) + 1,
+    `range=${JSON.stringify(range)} plan结果=${session.live().indexOf(p1.result)}`);
+  check("两次补步骤的 plan 都在区间里",
+    range !== null && range.shadowed.includes(p1.call) && range.shadowed.includes(p2.result),
     `range=${JSON.stringify(range)}`);
 
   const folded = foldOnce(ctx, session);
   const after = session.live();
-  check("照折，收走那 4 条过程",
-    folded === true && lastNotice(session)?.text === "tree_task消息：隐藏了4条过程上下文。",
+  check("照折，plan 的调用与返回一起收走",
+    folded === true && lastNotice(session)?.text === "tree_task消息：隐藏了8条过程上下文。",
     JSON.stringify(lastNotice(session)?.text));
-  check("老调用与 done 的调用返回都没被动",
-    after.includes(legacy.call) && after.includes(legacy.result) && after.includes(d.call) && after.includes(d.result),
+  check("起点那次 create 与两次 done 的调用返回都还在",
+    [c, d1, d2].every((each) => after.includes(each.call) && after.includes(each.result)),
     `surface = ${JSON.stringify(after)}`);
 }
 

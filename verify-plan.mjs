@@ -449,7 +449,7 @@ console.log("\n场景 9 · 渲染");
 
 check("没有计划时给出引导而不是抛错", () => {
   const text = renderTree(null);
-  return typeof text === "string" && text.includes("tree_task_plan");
+  return typeof text === "string" && text.includes("tree_task_create");
 });
 
 check("树里带上关键节点的 id 与标题", () => {

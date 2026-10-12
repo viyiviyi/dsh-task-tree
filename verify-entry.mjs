@@ -3,7 +3,7 @@
  *
  * 用假 ctx 直接跑 `apply`，覆盖三件事：
  *
- *   1. 启用后注册的是**五个**工具，记忆三工具与全部 `needs` 字段都清干净了。
+ *   1. 启用后注册的是**六个**工具，记忆三工具与全部 `needs` 字段都清干净了。
  *   2. 资料层已经不存在：`lib/resource.js` 没了，也没有任何模块还引用它、
  *      或残留 `registerResourceCapture` / `injectResources` / `pickResources` 之类的符号；
  *      配置项里也没有资料相关的开关。
@@ -42,22 +42,18 @@ function check(name, cond, detail) {
   }
 }
 
-/** 新模型下的五个工具。 */
-const FIVE_TOOLS = [
+/** 新模型下的六个工具。 */
+const SIX_TOOLS = [
   "tree_task_status",
+  "tree_task_create",
   "tree_task_plan",
   "tree_task_done",
   "tree_task_update",
   "tree_task_drop",
 ];
 
-/** 已删除的工具——再出现在任何地方都说明删漏了。 */
-const REMOVED_TOOLS = [
-  "tree_task_create",
-  "tree_task_save",
-  "tree_task_recall",
-  "tree_task_forget",
-];
+/** 已移除的记忆三工具——再出现在任何地方都说明删漏了。 */
+const REMOVED_TOOLS = ["tree_task_save", "tree_task_recall", "tree_task_forget"];
 
 /** 假 ctx：只给装配路径真正用到的东西，多给会掩盖真实耦合。 */
 function makeHarness() {
@@ -124,10 +120,10 @@ check(
   inject.length === 2 && inject.includes("systemPrompt") && inject.includes("tools"),
   JSON.stringify(inject),
 );
-check("注册了五个工具", names.length === 5, toolNames);
+check("注册了六个工具", names.length === 6, toolNames);
 check(
-  "五个工具正好是这一组",
-  FIVE_TOOLS.every((want) => names.includes(want)),
+  "六个工具正好是这一组",
+  SIX_TOOLS.every((want) => names.includes(want)),
   toolNames,
 );
 check(
@@ -327,8 +323,8 @@ check("enabled 默认是 true", DEFAULT_CONFIG.enabled === true, String(DEFAULT_
 const bare = makeHarness();
 apply(bare.ctx);
 check(
-  "不给 config 也注册五个工具",
-  bare.tools.map((tool) => tool.name).sort().join(", ") === FIVE_TOOLS.slice().sort().join(", "),
+  "不给 config 也注册六个工具",
+  bare.tools.map((tool) => tool.name).sort().join(", ") === SIX_TOOLS.slice().sort().join(", "),
   bare.tools.map((tool) => tool.name).join(", "),
 );
 check("不给 config 也加一段提示词", bare.sections.length === 1, String(bare.sections.length));
