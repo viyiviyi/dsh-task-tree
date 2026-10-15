@@ -14,6 +14,9 @@
  *   7. 跨重启的那次继续：进程里没有 waiter 可放行时，退一步用 `agent.followup()`
  *      把 idle 的会话推起来——拿到 agent、且计划里还有进行中的子任务时才推；
  *      常规（本进程内挂着的）继续**绝不**推消息。
+ *   8. **点「继续」是无条件的**：不管此刻有没有 waiter、agent 忙不忙、推没推动，
+ *      「被按住」都必须当场解除。旧实现只在"闸门恰好挂着一个"的那一瞬间才算数，
+ *      忙时点的那一下会被静默吞掉，随后闸门照旧把会话按死（真回归见 s-31）。
  *
  * waterfall 的契约是"必须 await next() 并把它返回"，所以每个场景除了看有没有
  * 结算，还要看 next 有没有被调用、返回值有没有原样传出去。
@@ -314,10 +317,10 @@ console.log("\n「被按住」落盘：");
     pause.pause("s-20");
     check("暂停写进了 held 文件", store.readHeld("s-20").paused === true);
     check("内存里也记着", pause.isPaused("s-20") === true);
-    // 这个会话既没有 agent 也没有计划：唤醒不成功，状态必须留着——
-    // 旧实现是"先清状态再尝试唤醒"，用户于是既没入口也没提示。
+    // 这个会话既没有 agent 也没有计划：推不起来，但**点过了就不再按住**。
+    // 旧实现是"推不起来就把状态留着"，那一次点击于是等于白点。
     const outcome = pause.resume("s-20");
-    check("没唤醒成功时状态保留着", store.readHeld("s-20").paused === true, JSON.stringify(outcome));
+    check("推不起来也解除按住", store.readHeld("s-20").paused === false, JSON.stringify(outcome));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -422,7 +425,8 @@ console.log("\n跨重启的那次继续：把 idle 会话推起来：");
     const outcome = pause.resume("s-24");
     check("正在跑的会话不推消息", outcome.woke === false && agents.followed.length === 0);
     check("给出的是 busy 的说法", outcome.reason === "busy", JSON.stringify(outcome));
-    check("正在跑时也留着状态（下一个岔口还会被按住）", store.readHeld("s-24").paused === true);
+    check("文案说清「不用唤醒」", String(outcome.text).includes("不用唤醒"), outcome.text);
+    check("★ 正在跑时也解除按住（下一个岔口不再被拦）", store.readHeld("s-24").paused === false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -451,7 +455,7 @@ console.log("\n跨重启的那次继续：把 idle 会话推起来：");
       JSON.stringify(outcome),
     );
     check("提示里讲了怎么办", String(outcome?.text ?? "").includes("发一条消息"), outcome?.text);
-    check("没加载时不丢状态，用户还能再点一次", store.readHeld("s-25").paused === true);
+    check("没加载也解除按住（点过了就算数）", store.readHeld("s-25").paused === false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -469,7 +473,7 @@ console.log("\n跨重启的那次继续：把 idle 会话推起来：");
     const outcome = pause.resume("s-26");
     check("计划收尾的会话不唤醒", outcome.woke === false && agents.followed.length === 0);
     check("给出的是 finished 的说法", outcome.reason === "finished", JSON.stringify(outcome));
-    check("整棵树都结束了才清状态", store.readHeld("s-26").paused === false);
+    check("计划收尾也解除按住", store.readHeld("s-26").paused === false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -551,7 +555,7 @@ console.log("\n跨重启的那次继续：把 idle 会话推起来：");
     const outcome = pause.resume("s-30");
     check("唤醒抛错也不炸", outcome.woke === false && outcome.reason === "error", JSON.stringify(outcome));
     check("提示里带上原因", String(outcome.text).includes("boom"), outcome.text);
-    check("出错时状态保留着", store.readHeld("s-30").paused === true);
+    check("出错也解除按住（原因在提示里，人看得见）", store.readHeld("s-30").paused === false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -589,6 +593,48 @@ console.log("\n跨重启的那次继续：把 idle 会话推起来：");
     const outcome = pause.resume("s-29");
     check("推的是 B 那个会话", outcome.woke === true && agents.followed[0]?.sessionId === "s-29");
     check("A 的暂停态没被这次继续动过", store.readHeld("s-28").paused === true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  // ★ 真回归：**工具还在跑的时候点「继续」**（s-31）。
+  //
+  // 实机就是这么卡死的：session-c516e2cc 23:05:59 点了暂停，那个 pwsh 工具
+  // 23:07:03 才跑完，中间点的那次「继续」正落在"没有 waiter、agent 正忙"的一瞬间。
+  // 旧实现把它吞掉、一个标记都不清；等闸门真挂上时，已经没人在等那一下点击，
+  // 会话就停在那儿了。这条时间线现在必须走通：忙时点继续 → 状态当场解除 →
+  // 随后那次 pre-step 直接放行。
+  const root = makeRoot();
+  try {
+    const store = createStore(root);
+    store.writePlan("s-31", makePlan());
+    const agents = makeAgents({ "s-31": { status: "running" } });
+    const { pause, gate } = makeHarness({ store, agents });
+
+    pause.pause("s-31"); // 人在工具还在跑的时候点了暂停
+    check("先确认按住了", pause.isPaused("s-31") === true && store.readHeld("s-31").paused === true);
+
+    const outcome = pause.resume("s-31"); // 又点了继续：此刻没有任何 waiter
+    check(
+      "忙时点继续也当场解除按住",
+      pause.isPaused("s-31") === false && store.readHeld("s-31").paused === false,
+      JSON.stringify(outcome),
+    );
+
+    // 工具跑完了，闸门这才走到岔口——它不能再把人按住。
+    // 用 Promise.race 兜住"旧实现会永远挂住"的那种失败：这里要的是**红**，不是卡死。
+    const step = makeStep("s-31");
+    const decision = await Promise.race([
+      gate(step.payload, step.next),
+      tick(300).then(() => null),
+    ]);
+    check(
+      "随后那次 pre-step 直接放行（旧实现会挂死在这里）",
+      decision?.kind === "enter" && step.nextCalls.length === 1,
+      decision === null ? "被闸门挂住了，没有结算" : JSON.stringify(decision),
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

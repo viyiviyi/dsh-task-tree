@@ -33,14 +33,15 @@ function check(name, cond, detail) {
   }
 }
 
-/** 当前这六个工具，顺序无关，只用来核对集合。 */
-const SIX_TOOLS = [
+/** 当前这七个工具，顺序无关，只用来核对集合。 */
+const SEVEN_TOOLS = [
   "tree_task_status",
   "tree_task_create",
   "tree_task_plan",
   "tree_task_done",
   "tree_task_update",
   "tree_task_drop",
+  "tree_task_delete",
 ];
 
 /** 已经删掉的工具——它们出现在注册表里就说明删漏了。 */
@@ -89,12 +90,12 @@ const execFor = (sessionId, name) => ({ name, agent: { session: { id: sessionId 
 
 // ---------------------------------------------------------------- 场景 1
 
-console.log("\n场景 1 · 六个工具的注册表与 schema");
+console.log("\n场景 1 · 七个工具的注册表与 schema");
 {
   const h = makeHarness();
 
-  check("恰好注册六个工具", h.tools.size === 6, `实际 ${h.tools.size}：${[...h.tools.keys()].join(", ")}`);
-  for (const name of SIX_TOOLS) check(`  ${name} 已注册`, h.tools.has(name));
+  check("恰好注册七个工具", h.tools.size === 7, `实际 ${h.tools.size}：${[...h.tools.keys()].join(", ")}`);
+  for (const name of SEVEN_TOOLS) check(`  ${name} 已注册`, h.tools.has(name));
   check(
     "记忆三工具都已移除",
     REMOVED_TOOLS.every((name) => !h.tools.has(name)),
@@ -165,6 +166,21 @@ console.log("\n场景 1 · 六个工具的注册表与 schema");
   check(
     "tree_task_done 的 result 说明按两层分别写了写法",
     /验收/u.test(done.description) && /验收/u.test(done.parameters.properties.result.description),
+  );
+
+  const del = h.tools.get("tree_task_delete");
+  check(
+    "tree_task_delete 只收 id 且必填",
+    JSON.stringify(Object.keys(del.parameters.properties)) === JSON.stringify(["id"]) &&
+      JSON.stringify(del.parameters.required) === JSON.stringify(["id"]),
+    JSON.stringify({ keys: Object.keys(del.parameters.properties), required: del.parameters.required }),
+  );
+  check(
+    "tree_task_delete 的说明与丢弃划清界限",
+    /丢弃/u.test(del.description) &&
+      /tree_task_drop/u.test(del.description) &&
+      /清理/u.test(del.description),
+    del.description,
   );
 
   for (const [name, def] of h.tools) {
@@ -459,6 +475,77 @@ console.log("\n场景 7 · 任何返回都不截断结果");
     resultLines.every((line) => goal.text.includes(line)),
     "",
   );
+}
+
+// ---------------------------------------------------------------- 场景 8
+
+console.log("\n场景 8 · tree_task_delete 真把节点摘掉");
+{
+  const h = makeHarness();
+  const create = h.tools.get("tree_task_create");
+  const planTool = h.tools.get("tree_task_plan");
+  const done = h.tools.get("tree_task_done");
+  const drop = h.tools.get("tree_task_drop");
+  const del = h.tools.get("tree_task_delete");
+
+  await create.execute(
+    { title: "目标甲", tasks: [{ title: "任务甲1" }, { title: "任务甲2" }] },
+    execFor("s11", "tree_task_create"),
+  );
+  await create.execute({ title: "目标乙", tasks: [{ title: "任务乙1" }] }, execFor("s11", "tree_task_create"));
+
+  const plan = h.store.readPlan("s11");
+  const [goalA, goalB] = plan.goals;
+  const [taskA1, taskA2] = goalA.tasks;
+  await planTool.execute(
+    { parentId: taskA1.id, children: [{ title: "步骤甲1" }, { title: "步骤甲2" }] },
+    execFor("s11", "tree_task_plan"),
+  );
+  const [stepA1, stepA2] = taskA1.steps;
+
+  // 先把一个步骤做完、再把另一个丢弃：两种"结束态"都要能删。
+  await done.execute({ id: stepA1.id, result: "步骤甲1 的结果" }, execFor("s11", "tree_task_done"));
+  await drop.execute({ id: stepA2.id }, execFor("s11", "tree_task_drop"));
+
+  const delDone = await del.execute({ id: stepA1.id }, execFor("s11", "tree_task_delete"));
+  check(
+    "已完成的步骤删得掉（丢弃做不到这件事）",
+    delDone.text.startsWith("已删除：") &&
+      delDone.text.includes("子任务「步骤甲1」") &&
+      !delDone.text.includes("步骤甲1 的结果"),
+    delDone.text.slice(0, 200),
+  );
+  check(
+    "删完之后返回给的是它所在那个目标的树",
+    delDone.text.includes("目标甲") && !delDone.text.includes("目标乙"),
+    delDone.text.slice(0, 200),
+  );
+  const afterStep = h.store.readPlan("s11");
+  check("步骤真的从树里消失了", afterStep.goals[0].tasks[0].steps.length === 1, String(afterStep.goals[0].tasks[0].steps.length));
+
+  const delTask = await del.execute({ id: taskA1.id }, execFor("s11", "tree_task_delete"));
+  check(
+    "删任务会把剩下的子任务一起带走",
+    delTask.text.includes("步骤甲2") && h.store.readPlan("s11").goals[0].tasks.length === 1,
+    delTask.text.slice(0, 200),
+  );
+
+  const delGoal = await del.execute({ id: goalA.id }, execFor("s11", "tree_task_delete"));
+  check(
+    "删目标是整支一起走",
+    delGoal.text.includes("任务甲2") && h.store.readPlan("s11").goals.length === 1,
+    delGoal.text.slice(0, 200),
+  );
+  check(
+    "删掉的目标不再渲染出树，剩下那个目标还在盘上",
+    !delGoal.text.includes("**目标**") &&
+      delGoal.text.includes("还剩 1 个目标") &&
+      h.store.readPlan("s11").goals[0].id === goalB.id,
+    delGoal.text.slice(0, 200),
+  );
+
+  const gone = await del.execute({ id: "g-nope" }, execFor("s11", "tree_task_delete"));
+  check("删不存在的节点被拒", gone.text.startsWith("没有删除："), gone.text);
 }
 
 // ---------------------------------------------------------------- 汇总

@@ -7,7 +7,7 @@
  * 跑法：`node verify-plan.mjs`。
  */
 
-import { addChildren, addGoal, activePath, checkpointOf, complete, createPlan, doneNotice, doneReply, dropNode, findNode, goalsOf, levelLabel, renderContinue, renderGoal, renderTree, updateNode } from "./lib/plan.js";
+import { addChildren, addGoal, activePath, checkpointOf, complete, createPlan, deleteNode, doneNotice, doneReply, dropNode, findNode, goalsOf, levelLabel, renderContinue, renderGoal, renderTree, updateNode } from "./lib/plan.js";
 
 let pass = 0;
 const failures = [];
@@ -358,7 +358,115 @@ check("丢弃后 activePath 跳过它", () => {
   return activePath(plan).step.id === a2.id;
 });
 
-console.log("\n场景 6 · 追加子节点");
+console.log("\n场景 6 · 删除（与丢弃划清界限）");
+
+check("删除子任务只摘掉它自己", () => {
+  const { plan, taskA, a1, a2 } = fixture();
+  const r = deleteNode(plan, a1.id);
+  return (
+    r.ok === true &&
+    taskA.steps.length === 1 &&
+    taskA.steps[0].id === a2.id &&
+    findNode(plan, a1.id) === null
+  );
+});
+
+check("删除任务会带走它的子任务", () => {
+  const { plan, goal, taskA, a1, a2 } = fixture();
+  const r = deleteNode(plan, taskA.id);
+  return (
+    r.ok === true &&
+    goal.tasks.length === 1 &&
+    findNode(plan, taskA.id) === null &&
+    findNode(plan, a1.id) === null &&
+    findNode(plan, a2.id) === null
+  );
+});
+
+check("删除目标是整支一起摘，别的目标不动", () => {
+  const { plan, goal, a1 } = fixture();
+  const other = addGoal(plan, { title: "第二个目标", tasks: [{ title: "任务C" }] });
+  const r = deleteNode(plan, goal.id);
+  return (
+    r.ok === true &&
+    goalsOf(plan).length === 1 &&
+    goalsOf(plan)[0].id === other.id &&
+    findNode(plan, a1.id) === null
+  );
+});
+
+check("删掉的东西按目标 → 任务 → 子任务列出来", () => {
+  const { plan, goal } = fixture();
+  const r = deleteNode(plan, goal.id);
+  return (
+    r.removed.length === 5 &&
+    r.removed[0].startsWith("目标") &&
+    r.removed.some((line) => line.includes("任务A")) &&
+    r.removed.some((line) => line.includes("子任务"))
+  );
+});
+
+check("已经完成的节点删得掉——这正是与丢弃的区别", () => {
+  const { plan, taskA, a1 } = fixture();
+  complete(plan, a1.id, "A1 的结果");
+  const r = deleteNode(plan, a1.id);
+  return r.ok === true && findNode(plan, a1.id) === null && taskA.steps.length === 1;
+});
+
+check("已经丢弃的节点也删得掉", () => {
+  const { plan, taskA, a1 } = fixture();
+  dropNode(plan, a1.id);
+  const r = deleteNode(plan, a1.id);
+  return r.ok === true && findNode(plan, a1.id) === null && taskA.steps.length === 1;
+});
+
+check("删光所有目标后 goals 是空数组，而不是没有计划", () => {
+  const { plan, goal } = fixture();
+  const r = deleteNode(plan, goal.id);
+  return (
+    r.ok === true &&
+    Array.isArray(plan.goals) &&
+    plan.goals.length === 0 &&
+    activePath(plan) === null &&
+    r.active === null
+  );
+});
+
+check("删除后活动路径重新算，不指向已删节点", () => {
+  const { plan, a1, a2 } = fixture();
+  deleteNode(plan, a1.id);
+  const active = activePath(plan);
+  return active !== null && active.step !== null && active.step.id === a2.id;
+});
+
+check("删掉检查点所在的那个任务，检查点跟着重算", () => {
+  const { plan, taskA, a1, a2 } = fixture();
+  dropNode(plan, a1.id);
+  dropNode(plan, a2.id);
+  const before = checkpointOf(plan);
+  const r = deleteNode(plan, taskA.id);
+  return (
+    before !== null &&
+    before.node.id === taskA.id &&
+    r.ok === true &&
+    r.checkpoint === null &&
+    checkpointOf(plan) === null
+  );
+});
+
+check("删除不存在的节点被拒", () => {
+  const { plan } = fixture();
+  const r = deleteNode(plan, "t-nope");
+  return r.ok === false && r.reason.includes("找不到节点");
+});
+
+check("删过的节点再删一次被拒", () => {
+  const { plan, a1 } = fixture();
+  deleteNode(plan, a1.id);
+  return deleteNode(plan, a1.id).ok === false;
+});
+
+console.log("\n场景 7 · 追加子节点");
 
 check("给目标追加的是任务，给任务追加的是子任务", () => {
   const { plan, goal, taskB } = fixture();
@@ -390,7 +498,7 @@ check("找不到父节点时被拒", () => {
   return addChildren(plan, "t-nope", [{ title: "x" }]).ok === false;
 });
 
-console.log("\n场景 7 · 修改节点");
+console.log("\n场景 8 · 修改节点");
 
 check("改标题与说明", () => {
   const { plan, a1 } = fixture();
@@ -421,7 +529,7 @@ check("说明可以改成空字符串", () => {
   return r.ok === true && a1.detail === "";
 });
 
-console.log("\n场景 8 · 查找与称呼");
+console.log("\n场景 9 · 查找与称呼");
 
 check("findNode 给出层级与沿途节点", () => {
   const { plan, goal, taskA, a1 } = fixture();
@@ -445,7 +553,7 @@ check("层级称呼固定为 目标 / 任务 / 子任务", () => {
   return levelLabel("goal") === "目标" && levelLabel("task") === "任务" && levelLabel("step") === "子任务";
 });
 
-console.log("\n场景 9 · 渲染");
+console.log("\n场景 10 · 渲染");
 
 check("没有计划时给出引导而不是抛错", () => {
   const text = renderTree(null);
@@ -683,7 +791,7 @@ check("renderContinue 在没拆子节点的任务上只说该做这个任务", (
   return text.includes("接下来需要进行任务：「光杆任务」") && !text.includes("tree_task_plan");
 });
 
-console.log("\n场景 10 · 一个会话多个目标");
+console.log("\n场景 11 · 一个会话多个目标");
 
 check("addGoal 追加目标，不动已有的那个", () => {
   const { plan, goal } = fixture();

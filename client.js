@@ -173,14 +173,23 @@ window.__ModuleLoader__.load({
 			}
 		}
 
-		/** 三层节点总数与已完成数，给单行条上的进度用。 */
+		/**
+		 * 三层节点总数与已完成数，给单行条上的进度用。
+		 *
+		 * **丢弃的节点两边都不算。** 丢弃是"这件事我不做了"，它不该压着进度——
+		 * 早先 total 无条件 +1、done 只认 `done`，于是丢一个节点进度就永远差一格，
+		 * 满不了。丢弃的证据在树里（划掉那一行），不需要分数再替它记一笔。
+		 */
 		function countNodes(goal) {
+			if (goal.status === "dropped") return { total: 0, done: 0 };
 			let total = 1;
 			let done = goal.status === "done" ? 1 : 0;
 			for (const task of goal.tasks || []) {
+				if (task.status === "dropped") continue;
 				total += 1;
 				if (task.status === "done") done += 1;
 				for (const step of task.steps || []) {
+					if (step.status === "dropped") continue;
 					total += 1;
 					if (step.status === "done") done += 1;
 				}
@@ -261,10 +270,21 @@ window.__ModuleLoader__.load({
 			"action.collapse": "收起",
 			"action.done": "完成…",
 			"action.drop": "丢弃",
+			"action.delete": "删除",
 			"action.submit": "提交结果",
 			"action.expandResult": "展开看全文",
 			"action.collapseResult": "收起",
 			"action.cancel": "取消",
+			"settings.nav": "树形任务流",
+			"settings.loading": "正在读设置…",
+			"settings.unavailable": "读不到设置：宿主那一半没在跑，或者接口不通。",
+			"settings.off": "插件在 profile 配置里被关掉了（enabled: false），这两个开关现在不起作用。",
+			"setting.note": "改完立刻生效，也会写进状态目录，重启 dsh web 之后还在。",
+			"setting.autoContinue": "任务没做完、模型自己停下时，自动把它叫起来接着跑",
+			"setting.autoContinueNote": "会往会话里推一条消息。默认关。",
+			"setting.interruptRecovery": "工具出错或网络断了，自动重试把会话拉起来",
+			"setting.interruptRecoveryNote":
+				"按 1 / 5 / 10 / 30 分钟各拉一次，一直拉不起来就停手。你按过停止的绝不拉起。",
 			"label.result": "结果",
 			"label.noResult": "（还没提交结果）",
 			"label.current": "当前",
@@ -274,7 +294,9 @@ window.__ModuleLoader__.load({
 				"写清这个节点产出了什么。它整段执行过程会被这条结果顶替，所以要能独立看懂。",
 			"hint.noChildren": "（还没有子节点 → 让模型调用 tree_task_plan）",
 			"confirm.reset": "确定要清空这个会话的计划树吗？",
-			"confirm.drop": "确定要丢弃「{title}」吗？",
+			"confirm.drop": "确定要丢弃「{title}」吗？丢弃会把它标成「不做了」，节点留在树里可查。",
+			"confirm.delete":
+				"确定要删除「{title}」吗？它会连同下面的任务或子任务一起从树里消失，找不回来；已经提交的结果也会一起没掉。如果只是「这件事不做了」，请改用丢弃。",
 		};
 
 		const en = {
@@ -294,10 +316,21 @@ window.__ModuleLoader__.load({
 			"action.collapse": "Collapse",
 			"action.done": "Complete…",
 			"action.drop": "Drop",
+			"action.delete": "Delete",
 			"action.submit": "Submit result",
 			"action.expandResult": "Show the full result",
 			"action.collapseResult": "Collapse",
 			"action.cancel": "Cancel",
+			"settings.nav": "Task tree",
+			"settings.loading": "Reading settings…",
+			"settings.unavailable": "Settings are unreachable: the host half is not running, or the endpoint is blocked.",
+			"settings.off": "The plugin is switched off in the profile config (enabled: false), so these switches do nothing right now.",
+			"setting.note": "Takes effect right away and is written to the state directory, so it survives a restart.",
+			"setting.autoContinue": "When the plan is unfinished and the model stops, wake it up to carry on",
+			"setting.autoContinueNote": "This pushes a message into the session. Off by default.",
+			"setting.interruptRecovery": "After a tool error or a dropped connection, retry to get the session going",
+			"setting.interruptRecoveryNote":
+				"Retries at 1 / 5 / 10 / 30 minutes, then gives up. A session you stopped is never revived.",
 			"label.result": "Result",
 			"label.noResult": "(no result submitted yet)",
 			"label.current": "current",
@@ -307,7 +340,9 @@ window.__ModuleLoader__.load({
 				"State what this node produced. Its whole execution range is replaced by this result, so it must stand on its own.",
 			"hint.noChildren": "(no children yet → ask the model to call tree_task_plan)",
 			"confirm.reset": "Clear this session's plan tree?",
-			"confirm.drop": "Drop “{title}”?",
+			"confirm.drop": "Drop “{title}”? It is marked as not-to-do and stays in the tree.",
+			"confirm.delete":
+				"Delete “{title}”? It disappears from the tree together with its tasks or steps, and any submitted result goes with it. If you only mean “not doing this”, use Drop instead.",
 		};
 
 		// ---------------------------------------------------------------- 样式
@@ -393,6 +428,18 @@ window.__ModuleLoader__.load({
 			".dsh-ttf-btn:disabled:hover{background:var(--dsw-alias-bg-base)}",
 			".dsh-ttf-error{color:var(--dsw-alias-state-error-primary,#c00);font-size:12px;line-height:18px;white-space:pre-wrap}",
 			".dsh-ttf-hint{padding:4px 4px 6px 24px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}",
+			// 设置：两行开关，跟树共用同一张卡片。
+			".dsh-ttf-settingsPage{display:flex;flex-direction:column;gap:10px;padding:4px 2px;max-width:640px}",
+			".dsh-ttf-settings{display:flex;flex-direction:column;gap:8px;padding:4px 4px 8px}",
+			".dsh-ttf-setting{display:flex;align-items:flex-start;gap:8px}",
+			".dsh-ttf-switch{box-sizing:border-box;flex:none;position:relative;width:32px;height:18px;margin-top:1px;padding:0;border:.5px solid var(--dsw-alias-border-l4);border-radius:999px;background:var(--dsw-alias-bg-module-platform);cursor:pointer}",
+			".dsh-ttf-switch:disabled{opacity:.4;cursor:default}",
+			".dsh-ttf-switchOn{border-color:var(--dsw-alias-state-business-primary,#4d6bfe);background:var(--dsw-alias-state-business-primary,#4d6bfe)}",
+			".dsh-ttf-switchKnob{position:absolute;top:1px;left:1px;width:14px;height:14px;border-radius:999px;background:#fff;transition:left .12s}",
+			".dsh-ttf-switchOn .dsh-ttf-switchKnob{left:15px}",
+			".dsh-ttf-settingText{display:flex;flex-direction:column;gap:2px;min-width:0}",
+			".dsh-ttf-settingName{color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px}",
+			".dsh-ttf-settingNote{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}",
 		].join("");
 
 		if (
@@ -505,7 +552,7 @@ window.__ModuleLoader__.load({
 		 * 一个节点：一行标题 + 可展开的详情。
 		 *
 		 * 三层共用同一个组件——它们的字段与动作本来就一样，差别只有缩进，
-		 * 以及"这一层要不要给丢弃按钮"（目标、任务、子任务都能丢）。
+		 * 以及"这一层要不要给丢弃与删除按钮"（目标、任务、子任务都能丢、都能删）。
 		 */
 		function NodeRow({ node, depth, activeIds, openIds, checkpointId, canDrop, sessionId, reload, t }) {
 			const children = node.tasks || node.steps || [];
@@ -574,12 +621,28 @@ window.__ModuleLoader__.load({
 							: null,
 						canAct && canDrop
 							? h(IconButton, {
-									iconBase: "IconTrashOutline",
+									// 划掉 = 留个记号说"这件事不做了"，和树里已丢弃节点的 × 标记是同一个意思。
+									// 垃圾桶留给真正的删除（见下一个按钮）。
+									iconBase: "IconCloseOutline",
 									label: t("action.drop"),
 									disabled: busy,
 									onClick: () => {
 										if (window.confirm(t("confirm.drop", { title: node.title }))) {
 											act({ action: "drop", id: node.id });
+										}
+									},
+								})
+							: null,
+						// 删除对**任何状态**都开着：它就是用来清理写错/建重的内容的，
+						// 已完成的节点恰恰是最需要清掉的那种（结果记错了）。
+						canDrop
+							? h(IconButton, {
+									iconBase: "IconTrashOutline",
+									label: t("action.delete"),
+									disabled: busy,
+									onClick: () => {
+										if (window.confirm(t("confirm.delete", { title: node.title }))) {
+											act({ action: "delete", id: node.id });
 										}
 									},
 								})
@@ -649,6 +712,121 @@ window.__ModuleLoader__.load({
 		}
 
 		// ---------------------------------------------------------------- 条目
+
+		/**
+		 * 设置里能改的开关。
+		 *
+		 * 键必须与 `lib/settings.js` 的 `SETTING_KEYS` **一模一样**：对不上时接口会
+		 * 400 拒掉，而界面只会安静地什么都没发生，最难查。自检里有一条断言把两份
+		 * 名单对起来（`verify-settings.mjs`）。
+		 *
+		 * 文案名就按 `setting.<键>` 拼，另配一条 `setting.<键>Note` 讲清楚它到底会做什么。
+		 */
+		const SETTING_ROWS = [
+			{ key: "autoContinue", note: "setting.autoContinueNote" },
+			{ key: "interruptRecovery", note: "setting.interruptRecoveryNote" },
+		];
+
+		/**
+		 * 设置面板里的那一页：两个开关。
+		 *
+		 * ★ 这一页挂在 **DSH 自己的设置面板**里（`settings.section` 槽），不在插件的
+		 * 任务条上。任务条是"看进度、按暂停"的地方；偏好属于设置，就该待在设置里。
+		 *
+		 * 数据走宿主那两个**与会话无关**的接口：读 `/dsh-tree-task-flow/settings`，
+		 * 写 `action: "setting"`。跟任务条不同，这里没有要盯的东西，所以不轮询：
+		 * 挂载时读一次，改完拿返回值就地更新。
+		 */
+		function TaskTreeSettings() {
+			const t = useT();
+			const [state, setState] = useState({ loading: true, data: null });
+			const [busy, setBusy] = useState(false);
+			const [note, setNote] = useState("");
+
+			useEffect(() => {
+				let alive = true;
+				(async () => {
+					try {
+						const data = await api("/dsh-tree-task-flow/settings");
+						if (alive) setState({ loading: false, data });
+					} catch {
+						// 读不到就说读不到，别画一排骗人的开关。
+						if (alive) setState({ loading: false, data: null });
+					}
+				})();
+				return () => {
+					alive = false;
+				};
+			}, []);
+
+			if (state.loading) {
+				return h("div", { className: "dsh-ttf-settingsPage" }, h("div", { className: "dsh-ttf-settingNote" }, t("settings.loading")));
+			}
+			if (!state.data) {
+				return h(
+					"div",
+					{ className: "dsh-ttf-settingsPage" },
+					h("div", { className: "dsh-ttf-settingNote" }, t("settings.unavailable")),
+				);
+			}
+
+			const settings = state.data.settings ?? {};
+
+			async function toggle(key, value) {
+				setBusy(true);
+				setNote("");
+				try {
+					const result = await post({ action: "setting", key, value });
+					if (result && result.settings) {
+						setState({ loading: false, data: Object.assign({}, state.data, { settings: result.settings }) });
+					}
+				} catch (failure) {
+					setNote(String((failure && failure.message) || failure));
+				} finally {
+					setBusy(false);
+				}
+			}
+
+			return h(
+				"div",
+				{ className: "dsh-ttf-settingsPage" },
+				h("div", { className: "dsh-ttf-settingNote" }, t("setting.note")),
+				state.data.enabled === false
+					? h("div", { className: "dsh-ttf-note" }, t("settings.off"))
+					: null,
+				h(
+					"div",
+					{ className: "dsh-ttf-settings" },
+					SETTING_ROWS.map((row) => {
+						const on = settings[row.key] === true;
+						return h(
+							"div",
+							{ className: "dsh-ttf-setting", key: row.key },
+							h(
+								"button",
+								{
+									type: "button",
+									role: "switch",
+									"aria-checked": on,
+									"aria-label": t("setting." + row.key),
+									className: "dsh-ttf-switch" + (on ? " dsh-ttf-switchOn" : ""),
+									disabled: busy,
+									onClick: () => toggle(row.key, !on),
+								},
+								h("span", { className: "dsh-ttf-switchKnob" }),
+							),
+							h(
+								"div",
+								{ className: "dsh-ttf-settingText" },
+								h("span", { className: "dsh-ttf-settingName" }, t("setting." + row.key)),
+								h("span", { className: "dsh-ttf-settingNote" }, t(row.note)),
+							),
+						);
+					}),
+				),
+				note ? h("div", { className: "dsh-ttf-note" }, note) : null,
+			);
+		}
 
 		/**
 		 * 输入框上方的全宽条目。
@@ -762,11 +940,15 @@ window.__ModuleLoader__.load({
 						h("span", { className: "dsh-ttf-glyph", "aria-hidden": true }, listGlyph),
 						h("span", { className: "dsh-ttf-label" + (held ? " dsh-ttf-labelHeld" : "") }, stateLabel),
 						h("span", { className: "dsh-ttf-title", title: heading }, heading),
-						h(
-							"span",
-							{ className: "dsh-ttf-progress" },
-							stats.done + "/" + stats.total + (current ? " · " + current : ""),
-						),
+						// 一个都算不上（整棵树都被丢弃了）就不报分数：0/0 比不显示更让人费解。
+						// 有 open 节点时 total 一定 ≥ 1，所以这里不会把"当前节点"那截弄丢。
+						stats.total > 0
+							? h(
+									"span",
+									{ className: "dsh-ttf-progress" },
+									stats.done + "/" + stats.total + (current ? " · " + current : ""),
+								)
+							: null,
 						h(
 							"div",
 							{ className: "dsh-ttf-actions" },
@@ -854,6 +1036,26 @@ window.__ModuleLoader__.load({
 						),
 					),
 				"dsh-tree-task-flow: conversation dock",
+			);
+
+			// 设置面板里的那一页。用 `settings.section` 这个**列表槽**，所以它会作为
+			// 一行出现在 DSH 设置面板的导航里（跟「通用」「市场」并排），点开就是
+			// 那两个开关。槽没被组合出来时（比如没有设置面板的宿主）这里什么都不发生。
+			ctx.effect(
+				() =>
+					ctx.slots.inject("settings.section", () =>
+						ctx.slots.register(
+							{
+								name: "settings.section",
+								id: ENTRY_ID,
+								order: 60,
+								label: () => translate("settings.nav"),
+								locale: NS,
+							},
+							TaskTreeSettings,
+						),
+					),
+				"dsh-tree-task-flow: settings section",
 			);
 		}
 

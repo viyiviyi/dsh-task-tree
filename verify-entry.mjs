@@ -42,14 +42,15 @@ function check(name, cond, detail) {
   }
 }
 
-/** 新模型下的六个工具。 */
-const SIX_TOOLS = [
+/** 新模型下的七个工具。 */
+const SEVEN_TOOLS = [
   "tree_task_status",
   "tree_task_create",
   "tree_task_plan",
   "tree_task_done",
   "tree_task_update",
   "tree_task_drop",
+  "tree_task_delete",
 ];
 
 /** 已移除的记忆三工具——再出现在任何地方都说明删漏了。 */
@@ -120,10 +121,10 @@ check(
   inject.length === 2 && inject.includes("systemPrompt") && inject.includes("tools"),
   JSON.stringify(inject),
 );
-check("注册了六个工具", names.length === 6, toolNames);
+check("注册了七个工具", names.length === 7, toolNames);
 check(
-  "六个工具正好是这一组",
-  SIX_TOOLS.every((want) => names.includes(want)),
+  "七个工具正好是这一组",
+  SEVEN_TOOLS.every((want) => names.includes(want)),
   toolNames,
 );
 check(
@@ -318,8 +319,8 @@ check(
 console.log("\n默认态（安装即启用，不给 config）：");
 check("enabled 默认是 true", DEFAULT_CONFIG.enabled === true, String(DEFAULT_CONFIG.enabled));
 check(
-  "autoContinue 默认是 true（没有配置界面，功能就不能默认关）",
-  DEFAULT_CONFIG.autoContinue === true,
+  "autoContinue 默认是 false（有设置界面了，默认值按「会不会打扰人」定）",
+  DEFAULT_CONFIG.autoContinue === false,
   String(DEFAULT_CONFIG.autoContinue),
 );
 check(
@@ -327,9 +328,14 @@ check(
   DEFAULT_CONFIG.interruptRecovery === true,
   String(DEFAULT_CONFIG.interruptRecovery),
 );
+// 旧规矩是"没有配置界面，功能就不能默认关"，所以那时要求一个默认关的布尔开关都没有。
+// 现在有界面了，规矩换成：**默认关的只允许那种"会主动往会话里推消息"的开关**——
+// 别的功能默认关就等于不存在，而这一种默认开才叫打扰人。
 check(
-  "默认配置里没有任何一个布尔开关是关着的",
-  Object.entries(DEFAULT_CONFIG).every(([key, value]) => (typeof value === "boolean" ? value === true : true)),
+  "默认关的布尔开关只允许 autoContinue（它会主动往会话里推消息）",
+  Object.entries(DEFAULT_CONFIG)
+    .filter(([, value]) => value === false)
+    .every(([key]) => key === "autoContinue"),
   JSON.stringify(DEFAULT_CONFIG),
 );
 
@@ -338,8 +344,8 @@ check(
 const bare = makeHarness();
 apply(bare.ctx);
 check(
-  "不给 config 也注册六个工具",
-  bare.tools.map((tool) => tool.name).sort().join(", ") === SIX_TOOLS.slice().sort().join(", "),
+  "不给 config 也注册七个工具",
+  bare.tools.map((tool) => tool.name).sort().join(", ") === SEVEN_TOOLS.slice().sort().join(", "),
   bare.tools.map((tool) => tool.name).join(", "),
 );
 check("不给 config 也加一段提示词", bare.sections.length === 1, String(bare.sections.length));

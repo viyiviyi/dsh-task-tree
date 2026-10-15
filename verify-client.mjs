@@ -14,10 +14,12 @@
  *      正文含条目外壳、单行条、图标按钮、展开体这些关键类。
  *   4. 文案：zh / en 键集一致，渲染过程中没有取到不存在的键。
  *   5. 渲染：折叠态是单行条（状态标签 + 目标标题 + 进度 + 暂停/继续、
- *      清空、展开三个图标按钮，没有展开体）；展开态出展开体，且只摊开正在走的
+ *      清空、设置、展开四个图标按钮，没有展开体）；展开态出展开体，且只摊开正在走的
  *      那条路径；暂停态状态标签变「已暂停」、按钮变「继续」、并给出暂停说明。
+ *   6. 设置：摊开后是两个开关，`role="switch"` + `aria-checked` 跟着接口给的
+ *      开关状态走，文案里的键都在。
  *
- * 假 react 不实现真实的 hook 语义：`TaskTreeDock` 的三个 `useState` 初值由
+ * 假 react 不实现真实的 hook 语义：`TaskTreeDock` 的四个 `useState` 初值由
  * 用例直接注入（`dockPreset`），`useEffect` 不执行——所以渲染不碰 fetch。
  *
  * 跑：node verify-client.mjs
@@ -70,8 +72,11 @@ globalThis.document = {
 
 const noop = () => {};
 let currentInstance = null;
-/** TaskTreeDock 的三个 useState 初值；null 表示按真实初值走。 */
+/** TaskTreeDock 的三个 useState（state / open / busy）加一个 note；null 表示按真实初值走。 */
 let dockPreset = null;
+/** TaskTreeSettings 的三个 useState（state / busy / note）初值。假 react 不跑 useEffect，
+ *  所以"取回设置之后"的样子只能这样喂进去。 */
+let settingsPreset = null;
 
 function makeElement(type, props, ...children) {
   const merged = Object.assign({}, props);
@@ -115,7 +120,12 @@ function render(node) {
     currentInstance = {
       hookIndex: 0,
       values: [],
-      preset: type.name === "TaskTreeDock" ? dockPreset : null,
+      preset:
+        type.name === "TaskTreeDock"
+          ? dockPreset
+          : type.name === "TaskTreeSettings"
+            ? settingsPreset
+            : null,
     };
     let output;
     try {
@@ -180,6 +190,7 @@ const ICON_BASES = [
   "IconCloseOutline",
   "IconPauseOutline",
   "IconPlayOutline",
+  "IconSettingsOutline",
   "IconTrashOutline",
 ];
 
@@ -233,6 +244,8 @@ check(
 const dictionaries = new Map();
 const missingKeys = [];
 let slotRegistration = null;
+/** 每个槽各自的注册（槽名 → `{ options, component }`）：现在挂了两个槽，不能只留最后一个。 */
+const slotRegistrations = new Map();
 const injectedSlots = [];
 
 const ctx = {
@@ -269,6 +282,7 @@ const ctx = {
     },
     register(options, component) {
       slotRegistration = { options, component };
+      slotRegistrations.set(options.name, { options, component });
       return noop;
     },
   },
@@ -278,24 +292,59 @@ plugin.apply(ctx);
 
 console.log("\n挂载点与样式：");
 
+/**
+ * 按槽名**现取**注册。每次 remount 都会重新 import 一份模块、注册一批新组件，
+ * 所以不能在这里存快照——存下来就永远指向第一次那份旧模块里的组件了。
+ */
+function dockEntry() {
+  return slotRegistrations.get("conversation.input.dock") ?? null;
+}
+function sectionEntry() {
+  return slotRegistrations.get("settings.section") ?? null;
+}
+
 check(
-  "挂在 conversation.input.dock",
-  injectedSlots.length === 1 && injectedSlots[0] === "conversation.input.dock",
+  "挂了两个槽：输入框上方的条目 + 设置面板里的一页",
+  injectedSlots.length === 2 &&
+    injectedSlots.includes("conversation.input.dock") &&
+    injectedSlots.includes("settings.section"),
   injectedSlots.join(", "),
 );
 check(
-  "用自己的 id 注册（不顶掉内置条目）",
-  slotRegistration !== null && slotRegistration.options.id === "dsh-tree-task-flow",
-  String(slotRegistration && slotRegistration.options.id),
+  "条目用自己的 id 注册（不顶掉内置条目）",
+  dockEntry() !== null && dockEntry().options.id === "dsh-tree-task-flow",
+  String(dockEntry() && dockEntry().options.id),
 );
 check(
-  "排序 50，排在内置 todo(0) / goal(10) / queue(20) 之后",
-  slotRegistration !== null && slotRegistration.options.order === 50,
-  String(slotRegistration && slotRegistration.options.order),
+  "条目排序 50，排在内置 todo(0) / goal(10) / queue(20) 之后",
+  dockEntry() !== null && dockEntry().options.order === 50,
+  String(dockEntry() && dockEntry().options.order),
+);
+check("条目注册的是个组件", dockEntry() !== null && typeof dockEntry().component === "function");
+
+console.log("\n设置面板里的一页：");
+
+check("注册进了 settings.section（不再挂在任务条上）", sectionEntry() !== null);
+check(
+  "用的也是插件自己的 id",
+  sectionEntry() !== null && sectionEntry().options.id === "dsh-tree-task-flow",
+  String(sectionEntry() && sectionEntry().options.id),
 );
 check(
-  "注册的是个组件",
-  slotRegistration !== null && typeof slotRegistration.component === "function",
+  "排序 60（排在任务条之后，不与内置页抢位）",
+  sectionEntry() !== null && sectionEntry().options.order === 60,
+  String(sectionEntry() && sectionEntry().options.order),
+);
+check(
+  "导航里的名字由 label thunk 现取（换语言跟着换）",
+  sectionEntry() !== null &&
+    typeof sectionEntry().options.label === "function" &&
+    sectionEntry().options.label() === "树形任务流",
+  sectionEntry() === null ? "" : String(sectionEntry().options.label),
+);
+check(
+  "设置页注册的是个组件",
+  sectionEntry() !== null && typeof sectionEntry().component === "function",
 );
 
 check("注入了一个样式标签", styleTags.length === 1, String(styleTags.length));
@@ -317,6 +366,8 @@ for (const cls of [
   ".dsh-ttf-body",
   ".dsh-ttf-row",
   ".dsh-ttf-tagWarn",
+  ".dsh-ttf-settingsPage",
+  ".dsh-ttf-switch",
 ]) {
   check(`样式里有 ${cls}`, CSS.includes(cls));
 }
@@ -395,11 +446,21 @@ const DATA = {
 };
 
 function renderDock(data, open) {
-  dockPreset = [{ loading: false, data }, open, false];
+  dockPreset = [{ loading: false, data }, open, false, null];
   try {
-    return render(makeElement(slotRegistration.component, { sessionId: "s1" }));
+    return render(makeElement(dockEntry().component, { sessionId: "s1" }));
   } finally {
     dockPreset = null;
+  }
+}
+
+/** 渲染设置页。`data` 是 `/settings` 返回的那一份；null 表示读不到。 */
+function renderSettings(data, busy = false) {
+  settingsPreset = [{ loading: false, data }, busy, ""];
+  try {
+    return render(makeElement(sectionEntry().component, {}));
+  } finally {
+    settingsPreset = null;
   }
 }
 
@@ -417,6 +478,10 @@ check("没有展开体", !hasClass(collapsed, "dsh-ttf-body"));
 check("运行中有「暂停」按钮", byAria(collapsed, "暂停").length === 1, String(byAria(collapsed, "暂停").length));
 check("运行中没有「继续」按钮", byAria(collapsed, "继续").length === 0);
 check("有「清空计划」按钮", byAria(collapsed, "清空计划").length === 1);
+check(
+  "任务条上没有「设置」按钮（设置挪到 DSH 设置面板里了）",
+  byAria(collapsed, "设置").length === 0,
+);
 check("有「展开」按钮", byAria(collapsed, "展开").length === 1);
 check(
   "按钮是图标按钮（走内置样式）",
@@ -588,6 +653,85 @@ check(
   dropButtons.length === 2,
   String(dropButtons.length),
 );
+const deleteButtons = byAria(expanded, "删除");
+check(
+  "删除给到每一个节点——已完成的那个也有",
+  deleteButtons.length === 3,
+  String(deleteButtons.length),
+);
+check("删除用的是垃圾桶图标", hasIcon(expanded, "IconTrashOutlineRegular"));
+check("丢弃改用划掉图标（垃圾桶让给删除）", hasIcon(expanded, "IconCloseOutlineRegular"));
+
+console.log("\n进度不把丢弃的算进去：");
+const DROPPED = {
+  ok: true,
+  plan: {
+    sessionId: "s1",
+    goals: [
+      {
+        id: "g1",
+        title: "示例目标",
+        status: "pending",
+        tasks: [
+          {
+            id: "t1",
+            title: "任务一",
+            status: "done",
+            steps: [{ id: "x1", title: "子任务一", status: "done" }],
+          },
+          {
+            id: "t2",
+            title: "任务二",
+            status: "dropped",
+            steps: [{ id: "x2", title: "子任务二", status: "dropped" }],
+          },
+          { id: "t3", title: "任务三", status: "pending", steps: [] },
+        ],
+      },
+    ],
+  },
+  active: { goalId: "g1", taskId: "t3", stepId: null },
+  checkpoint: null,
+  stopped: false,
+  paused: false,
+};
+
+const droppedBar = renderDock(DROPPED, false);
+check(
+  "丢弃的任务与子任务，分子分母都不算",
+  hasText(droppedBar, "2/4"),
+  "找的是 2/4（目标 + 任务一 + 子任务一 + 任务三，共 4 项；做完的是任务一与子任务一）",
+);
+check("旧口径的 2/6 不再出现", !hasText(droppedBar, "2/6"));
+
+const ALL_DROPPED = {
+  ok: true,
+  plan: {
+    sessionId: "s1",
+    goals: [
+      {
+        id: "g1",
+        title: "弃掉的目标",
+        status: "dropped",
+        tasks: [
+          {
+            id: "t1",
+            title: "任务一",
+            status: "dropped",
+            steps: [{ id: "x1", title: "子任务一", status: "dropped" }],
+          },
+        ],
+      },
+    ],
+  },
+  active: null,
+  checkpoint: null,
+  stopped: false,
+  paused: false,
+};
+
+const allDroppedBar = renderDock(ALL_DROPPED, false);
+check("整棵树都丢弃时不报分数（0/0 比不显示更费解）", !hasClass(allDroppedBar, "dsh-ttf-progress"));
 
 console.log("\n暂停态：");
 const paused = renderDock(Object.assign({}, DATA, { paused: true }), true);
@@ -602,8 +746,53 @@ console.log("\n停止态与空态：");
 const stopped = renderDock(Object.assign({}, DATA, { stopped: true }), false);
 check("人按过停止时也显示「已暂停」并给「继续」", hasText(stopped, "已暂停") && byAria(stopped, "继续").length === 1);
 
-dockPreset = [{ loading: false, empty: true }, false, false];
-const empty = render(makeElement(slotRegistration.component, { sessionId: "s1" }));
+console.log("\n设置面板里的那一页（settings.section）：");
+
+const settingsPage = renderSettings({ ok: true, enabled: true, settings: { autoContinue: false, interruptRecovery: true } });
+
+check("渲染成设置页", hasClass(settingsPage, "dsh-ttf-settingsPage"));
+check("说明写清改完立刻生效、重启还在", hasText(settingsPage, "改完立刻生效"));
+const switches = findAll(settingsPage, (node) => node.props && node.props.role === "switch");
+check("正好两个开关", switches.length === 2, String(switches.length));
+check(
+  "两个开关的名字都在",
+  hasText(settingsPage, "任务没做完") && hasText(settingsPage, "工具出错或网络断了"),
+);
+check(
+  "aria-checked 跟着接口给的开关状态走",
+  switches.map((node) => node.props["aria-checked"]).join(",") === "false,true",
+  switches.map((node) => node.props["aria-checked"]).join(","),
+);
+check(
+  "开着的那个带 switchOn 类，关着的不带",
+  switches.filter((node) => classOf(node).includes("dsh-ttf-switchOn")).length === 1 &&
+    classOf(switches[1]).includes("dsh-ttf-switchOn"),
+);
+check(
+  "每个开关都能点（按钮不是 disabled）",
+  switches.every((node) => node.props.disabled !== true),
+);
+
+const busyPage = renderSettings({ ok: true, enabled: true, settings: { autoContinue: true, interruptRecovery: true } }, true);
+check(
+  "正在写的时候两个开关都按下去不动",
+  findAll(busyPage, (node) => node.props && node.props.role === "switch").every(
+    (node) => node.props.disabled === true,
+  ),
+);
+
+const offPage = renderSettings({ ok: true, enabled: false, settings: { autoContinue: false, interruptRecovery: true } });
+check("插件被关掉时页面上说清这两个开关不起作用", hasText(offPage, "enabled: false"));
+
+settingsPreset = [{ loading: true, data: null }, false, ""];
+const loadingPage = render(makeElement(sectionEntry().component, {}));
+settingsPreset = null;
+check("还没读到时说「正在读设置」而不是画一排假开关", hasText(loadingPage, "正在读设置"));
+
+check("读不到设置时说读不到", hasText(renderSettings(null), "读不到设置"));
+
+dockPreset = [{ loading: false, empty: true }, false, false, null];
+const empty = render(makeElement(dockEntry().component, { sessionId: "s1" }));
 dockPreset = null;
 check("没有计划时什么都不渲染", empty === null);
 
