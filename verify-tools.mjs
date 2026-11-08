@@ -440,11 +440,17 @@ console.log("\n场景 6b · 开始需求");
 
   await call(h, "s1", "tree_task_requirement", { id: "R1", action: "confirm", title: "甲", intro: "简介一句" });
   await call(h, "s1", "tree_task_plan", { parentId: "R1", children: [{ title: "任务一" }] });
+  const taskA = h.plans.get("s1").goals[0].tasks[0];
+  await call(h, "s1", "tree_task_plan", { parentId: taskA.id, children: [{ title: "步骤一" }] });
+  const stepA = h.plans.get("s1").goals[0].tasks[0].steps[0];
+  await call(h, "s1", "tree_task_done", { id: stepA.id, result: "这一步做了" });
 
   const text = await call(h, "s1", "tree_task_start", { id: "R1" });
   check("开始需求返回这条需求的详情",
     text.includes("R1 需求开始，需求详情：") && text.includes("requirement:") && text.includes("简介一句") && text.includes("任务一"),
     text);
+  check("步骤的 result 缩进在该步骤节点内（与 status 同级）",
+    text.includes("\n          result: 这一步做了"), text);
   check("记下开始时间", typeof h.plans.get("s1").goals[0].startedAt === "number");
   check("找不到的需求开工被拒", (await call(h, "s1", "tree_task_start", { id: "R9" })).includes("找不到需求"));
 
