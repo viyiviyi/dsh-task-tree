@@ -1,6 +1,6 @@
 {
   "name": "dsh-tree-task-flow",
-  "version": "0.3.15",
+  "version": "0.3.16",
   "description": "树形任务流：把用户在这个会话里提的要求记成需求，需求下面挂任务与步骤；完成步骤、任务或需求并记录结果，这段执行过程随即从上下文折叠掉，只留下结果。",
   "type": "module",
   "main": "lib/index.js",
