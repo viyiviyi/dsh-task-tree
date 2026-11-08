@@ -230,7 +230,7 @@ console.log("\n场景 2 · 提出需求（草稿）");
   );
 
   const list = await call(h, "s1", "tree_task_status", {});
-  check("草稿不出现在活跃列表里，只在草稿区", list.includes("活跃 0 条") && list.includes("草稿 1 条"), list);
+  check("草稿不出现在活跃列表里，只在草稿区", list.includes("active: []") && list.includes("drafts:") && list.includes("id: R1"), list);
 
   const withTasks = await call(h, "s2", "tree_task_create", {
     title: "一口气写全",
@@ -279,7 +279,7 @@ console.log("\n场景 3 · 确认草稿成正式需求");
   );
 
   const list = await call(h, "s1", "tree_task_status", {});
-  check("确认后出现在活跃列表里", list.includes("活跃 1 条") && list.includes("菜单改深色"), list);
+  check("确认后出现在活跃列表里", list.includes("active:") && !list.includes("active: []") && list.includes("菜单改深色"), list);
 }
 
 // ---------------------------------------------------------------- 场景 4
@@ -353,7 +353,7 @@ console.log("\n场景 5 · 归档与前置");
   check("archive 报一句结果，不倒整棵树", archived.includes("已归档") && !archived.includes("已归档（"), archived);
 
   const list = await call(h, "s1", "tree_task_status", {});
-  check("归档后活跃剩一条、已归档一条", list.includes("活跃 1 条") && list.includes("已归档 1 条"), list);
+  check("归档后活跃剩一条、已归档一条", list.includes("archived:") && !list.includes("archived: []") && list.includes("乙"), list);
 
   const again = await call(h, "s1", "tree_task_requirement", { id: "R1", action: "archive" });
   check("重复归档说「本来就是归档状态」", again.includes("本来就是归档状态"), again);
@@ -369,7 +369,7 @@ console.log("\n场景 5 · 归档与前置");
   check("设前置成功并报出来", pre.includes("R1"), pre);
   check(
     "前置那一行不把同一个编号说两遍",
-    pre.includes("**前置**：R1（未完成）") && !pre.includes("缺 R1（"),
+    pre.includes("prerequisites:") && pre.includes("R1（未完成）") && !pre.includes("缺 R1（"),
     pre,
   );
   const cycle = await call(h, "s1", "tree_task_requirement", {
@@ -394,7 +394,7 @@ console.log("\n场景 6 · 任务与步骤");
     parentId: "R1",
     children: [{ title: "任务一" }, { title: "任务二" }],
   });
-  check("给需求加任务报「任务」", added.includes("已添加 2 个任务"), added);
+  check("给需求加任务报「任务」", added.includes("added_tasks:") && added.includes("任务一"), added);
   check("返回只给这条需求的进度，不是整个列表", added.includes("R1") && !added.includes("需求列表"));
 
   const plan = h.plans.get("s1");
@@ -403,7 +403,7 @@ console.log("\n场景 6 · 任务与步骤");
     parentId: taskA.id,
     children: [{ title: "步骤一" }],
   });
-  check("给任务加步骤报「步骤」", steps.includes("已添加 1 个步骤"), steps);
+  check("给任务加步骤报「步骤」", steps.includes("added_steps:") && steps.includes("步骤一"), steps);
 
   const stepId = h.plans.get("s1").goals[0].tasks[0].steps[0].id;
   const tooDeep = await call(h, "s1", "tree_task_plan", { parentId: stepId, children: [{ title: "更深" }] });
@@ -442,7 +442,9 @@ console.log("\n场景 6b · 开始需求");
   await call(h, "s1", "tree_task_plan", { parentId: "R1", children: [{ title: "任务一" }] });
 
   const text = await call(h, "s1", "tree_task_start", { id: "R1" });
-  check("开始需求返回这条需求的详情", text.includes("## R1") && text.includes("简介一句") && text.includes("任务一"), text);
+  check("开始需求返回这条需求的详情",
+    text.includes("R1 需求开始，需求详情：") && text.includes("requirement:") && text.includes("简介一句") && text.includes("任务一"),
+    text);
   check("记下开始时间", typeof h.plans.get("s1").goals[0].startedAt === "number");
   check("找不到的需求开工被拒", (await call(h, "s1", "tree_task_start", { id: "R9" })).includes("找不到需求"));
 
@@ -472,7 +474,7 @@ console.log("\n场景 7 · 完成任务与需求时的提示");
   check("完成需求必须有总结", noSummary.includes("没有完成"), noSummary);
 
   const summary = await call(h, "s1", "tree_task_done", { id: "R1", result: "做完了，坑在 README" });
-  check("需求完成时返回「简」列表", summary.includes("需求列表（") && summary.includes("活跃 1 条"), summary);
+  check("需求完成时返回固定句式与结果", summary.includes("R1 需求已完成，结果：") && summary.includes("做完了，坑在 README"), summary);
   const saved = h.plans.get("s1").goals[0];
   check(
     "总结落进 result，状态 done",
@@ -579,15 +581,17 @@ console.log("\n场景 9 · 查询");
   await call(h, "s1", "tree_task_requirement", { id: "R2", action: "confirm", change: "确认补充的细节" });
 
   const list = await call(h, "s1", "tree_task_status", {});
-  check("列表带计数与两条需求", list.includes("活跃 2 条") && list.includes("改菜单") && list.includes("加导出"), list);
+  check("列表带两条需求", list.includes("requirements:") && list.includes("改菜单") && list.includes("加导出"), list);
   check("列表只给标题与简介，不给详情", !list.includes("更长更长的详情"));
 
   const one = await call(h, "s1", "tree_task_status", { ids: ["R2"] });
   check("按编号查详情会给出详情全文", one.includes("更长更长的详情"), one);
-  check("默认节包含任务列表", one.includes("**任务**"), one);
+  check("默认节包含任务列表", one.includes("requirement:") && one.includes("tasks: []"), one);
 
   const withVersions = await call(h, "s1", "tree_task_status", { ids: ["R2"], include: ["detail", "versions"] });
-  check("要历史就给版本历史，两次改动都在", withVersions.includes("v1") && withVersions.includes("v2"));
+  check("要历史就给版本历史，两次改动都在",
+    withVersions.includes("versions:") && withVersions.includes("- n: 1") && withVersions.includes("- n: 2"),
+    withVersions);
 
   const many = await call(h, "s1", "tree_task_status", { ids: ["R1", "R2"] });
   check("一次查多条，两条都在", many.includes("R1") && many.includes("R2") && many.includes("---"));

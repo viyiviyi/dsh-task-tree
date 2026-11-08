@@ -168,13 +168,13 @@ function lastNotice(session) {
   const live = session.live();
   for (let index = live.length - 1; index >= 0; index -= 1) {
     const text = textOf(session.eventAt(live[index]));
-    if (text.startsWith("tree_task消息：隐藏了")) return { seq: live[index], text };
+    if (text.startsWith("tree_task消息：此处隐藏了")) return { seq: live[index], text };
   }
   return null;
 }
 
 function countNotices(session) {
-  return session.live().filter((seq) => textOf(session.eventAt(seq)).startsWith("tree_task消息：隐藏了")).length;
+  return session.live().filter((seq) => textOf(session.eventAt(seq)).startsWith("tree_task消息：此处隐藏了")).length;
 }
 
 // ---------------------------------------------------------------- 场景 1
@@ -203,9 +203,9 @@ console.log("\n场景 1 · 起点取「上次 done 之后的第一个 create/pla
   const notice = lastNotice(session);
   check("确实折了", folded === true && notice !== null, JSON.stringify(after));
   check("收走 create 与 done 之间的 12 条（过程 + plan + 过程）",
-    notice.text === "tree_task消息：隐藏了12条过程上下文。", JSON.stringify(notice.text));
+    notice.text === "tree_task消息：此处隐藏了12条过程上下文。", JSON.stringify(notice.text));
   check("界面上那一行的摘要带「树形任务流 · 」前缀",
-    session.eventAt(notice.seq)?.data?.source?.summary === "树形任务流 · 隐藏了12条过程上下文",
+    session.eventAt(notice.seq)?.data?.source?.summary === "树形任务流 · 此处隐藏了12条过程上下文",
     String(session.eventAt(notice.seq)?.data?.source?.summary));
   check("create 与 done 的调用与返回都还在",
     [c, d].every((each) => after.includes(each.call) && after.includes(each.result)),
@@ -257,7 +257,7 @@ console.log("\n场景 3 · 边界调用挨着：create 与 done 之间只剩一�
   const after = session.live();
   const notice = lastNotice(session);
   check("折了那 2 条：plan 的调用与返回",
-    folded === true && notice?.text === "tree_task消息：隐藏了2条过程上下文。", JSON.stringify(notice?.text));
+    folded === true && notice?.text === "tree_task消息：此处隐藏了2条过程上下文。", JSON.stringify(notice?.text));
   check("create 与 done 的调用与返回还在，plan 的不在了",
     after.includes(c.call) && after.includes(c.result) && after.includes(d.call) && after.includes(d.result) &&
       !after.includes(p.call) && !after.includes(p.result),
@@ -322,7 +322,7 @@ console.log("\n场景 5 · 真人消息在区间之外不影响折叠");
 
 // ---------------------------------------------------------------- 场景 6
 
-console.log("\n场景 6 · 正文附上读写了哪些文件");
+console.log("\n场景 6 · 正文附上修改或生成了哪些文件");
 {
   const session = makeSession();
   boot(session);
@@ -337,12 +337,15 @@ console.log("\n场景 6 · 正文附上读写了哪些文件");
 
   foldOnce(ctx, session);
   const notice = lastNotice(session);
-  check("读取列表去重、按出现顺序",
-    notice.text.includes("读取：C:/w/a.js、C:/w/b.js"), JSON.stringify(notice.text));
-  check("写入列表分开列，同一文件既读又写也各算一次",
-    notice.text.includes("写入：C:/w/c.js"), JSON.stringify(notice.text));
+  check("文件列表只列写入的文件，读完不算",
+    notice.text.includes("其中修改或生成了文件：") &&
+      notice.text.includes("C:/w/c.js") &&
+      !notice.text.includes("C:/w/a.js"),
+    JSON.stringify(notice.text));
+  check("同一文件写了两次也只列一次",
+    notice.text.split("C:/w/c.js").length - 1 === 1, JSON.stringify(notice.text));
   check("命令类调用不产生文件条目", !notice.text.includes("d.js"), JSON.stringify(notice.text));
-  check("多行：条数一行、读一行、写一行", notice.text.split("\n").length === 3, JSON.stringify(notice.text));
+  check("多行：条数一行、文件标题一行、文件一行", notice.text.split("\n").length === 3, JSON.stringify(notice.text));
 }
 
 // ---------------------------------------------------------------- 场景 7
@@ -361,7 +364,7 @@ console.log("\n场景 7 · done 之后又干活，区间仍止于新的那次 do
   const after = session.live();
   const notice = lastNotice(session);
   check("区间从 d1 调用之后收到 d2 调用之前（那 4 条过程）",
-    notice !== null && notice.text === "tree_task消息：隐藏了4条过程上下文。", JSON.stringify(notice?.text));
+    notice !== null && notice.text === "tree_task消息：此处隐藏了4条过程上下文。", JSON.stringify(notice?.text));
   check("d1 与 d2 的调用和返回都还在",
     [d1, d2].every((each) => after.includes(each.call) && after.includes(each.result)),
     `surface = ${JSON.stringify(after)}`);
@@ -441,7 +444,7 @@ console.log("\n场景 11 · 分阶段推进：plan 不是边界，上次 done �
   const d1 = done(session, "d1");
 
   check("阶段 A：折掉 create 之后那 4 条",
-    foldOnce(ctx, session) === true && lastNotice(session)?.text === "tree_task消息：隐藏了4条过程上下文。",
+    foldOnce(ctx, session) === true && lastNotice(session)?.text === "tree_task消息：此处隐藏了4条过程上下文。",
     JSON.stringify(lastNotice(session)?.text));
 
   work(session, 2);
@@ -463,7 +466,7 @@ console.log("\n场景 11 · 分阶段推进：plan 不是边界，上次 done �
   const folded = foldOnce(ctx, session);
   const after = session.live();
   check("阶段 B：收走 10 条（上次 done 之后的 4 条过程 + plan 的调用与返回 + 后面 4 条）",
-    folded === true && lastNotice(session)?.text === "tree_task消息：隐藏了10条过程上下文。",
+    folded === true && lastNotice(session)?.text === "tree_task消息：此处隐藏了10条过程上下文。",
     JSON.stringify(lastNotice(session)?.text));
   check("上次 done 与这次 plan 之间的 4 条也一起收走了",
     gap.every((seq) => !after.includes(seq)), `gap=${JSON.stringify(gap)} surface=${JSON.stringify(after)}`);
@@ -496,7 +499,7 @@ console.log("\n场景 13 · done → 过程 → plan → 过程 → done：plan 
   const folded = foldOnce(ctx, session);
   const after = session.live();
   check("收走 6 条：过程 2 + plan 的调用与返回 2 + 过程 2",
-    folded === true && lastNotice(session)?.text === "tree_task消息：隐藏了6条过程上下文。",
+    folded === true && lastNotice(session)?.text === "tree_task消息：此处隐藏了6条过程上下文。",
     JSON.stringify(lastNotice(session)?.text));
   check("plan 的调用与返回不在表层了",
     !after.includes(p.call) && !after.includes(p.result), `surface = ${JSON.stringify(after)}`);
@@ -557,7 +560,7 @@ console.log("\n场景 14 · 追加子节点的 plan 永远成不了起点");
   const folded = foldOnce(ctx, session);
   const after = session.live();
   check("照折，plan 的调用与返回一起收走",
-    folded === true && lastNotice(session)?.text === "tree_task消息：隐藏了8条过程上下文。",
+    folded === true && lastNotice(session)?.text === "tree_task消息：此处隐藏了8条过程上下文。",
     JSON.stringify(lastNotice(session)?.text));
   check("起点那次 create 与两次 done 的调用返回都还在",
     [c, d1, d2].every((each) => after.includes(each.call) && after.includes(each.result)),
@@ -661,7 +664,7 @@ console.log("\n场景 17 · 需求完成后把它整条收成一条");
 
   foldOnce(ctx, session, planWith(), storeWithNotes());
   check("收完只剩一条通告", countNotices(session) === 1, `surface = ${JSON.stringify(session.live())}`);
-  check("通告写明是整条归档", lastNotice(session)?.text.includes("R1 从开工到完成"),
+  check("通告只写条数，不点名需求", lastNotice(session)?.text === "tree_task消息：此处隐藏了7条过程上下文。",
     JSON.stringify(lastNotice(session)?.text));
   check("create 与需求 done 的调用返回都还在",
     [c, d2].every((each) => session.live().includes(each.call) && session.live().includes(each.result)));
@@ -693,7 +696,7 @@ console.log("\n场景 17b · 需求折完之后，每个 step 都不能再空折
   check("那次 create 的调用与返回都还在", session.live().includes(c.call) && session.live().includes(c.result));
 }
 
-console.log("\n场景 18 · 通告带上本区间的笔记，二次折叠也不丢");
+console.log("\n场景 18 · 通告不带笔记，笔记只走 tree_task_note 的返回");
 {
   const session = makeSession();
   boot(session);
@@ -706,22 +709,22 @@ console.log("\n场景 18 · 通告带上本区间的笔记，二次折叠也不�
   const firstNotes = [{ key: "构建入口", text: "用 build.ps1", rev: 1, at: 1, seq: noteSeq }];
   foldOnce(ctx, session, planWith(), storeWithNotes(firstNotes));
   const first = lastNotice(session);
-  check("第一次折叠的通告里有笔记段",
-    first !== null && first.text.includes("笔记：") && first.text.includes("· 构建入口 (r1)：用 build.ps1"),
+  check("第一次折叠的通告里没有笔记段",
+    first !== null && !first.text.includes("笔记") && !first.text.includes("构建入口"),
     JSON.stringify(first?.text));
 
   work(session, 1);
   doneFor(session, "R1", "d2");
   foldOnce(ctx, session, planWith(), storeWithNotes(firstNotes));
   const second = lastNotice(session);
-  check("需求级折叠把那条旧通告收走，笔记却仍在新的通告里",
-    second !== null && second.text.includes("· 构建入口 (r1)：用 build.ps1"),
+  check("需求级折叠把那条旧通告收走，新通告同样不带笔记",
+    second !== null && !second.text.includes("笔记") && !second.text.includes("构建入口"),
     JSON.stringify(second?.text));
-  check("上下文里仍然只有一条通告、一条笔记", countNotices(session) === 1);
+  check("上下文里仍然只有一条通告", countNotices(session) === 1);
   check("create 还在", session.live().includes(c.call));
 }
 
-console.log("\n场景 19 · 通告末尾带活跃需求指针");
+console.log("\n场景 19 · 通告不带活跃需求指针");
 {
   const session = makeSession();
   boot(session);
@@ -729,10 +732,10 @@ console.log("\n场景 19 · 通告末尾带活跃需求指针");
   work(session, 1);
   doneFor(session, "t-1", "d1");
   foldOnce(ctx, session, { version: 3, goals: [{ id: "R9", title: "别的", status: "done", archived: false, prerequisites: [], versions: [], tasks: [] }] }, storeWithNotes());
-  check("指针说清还有几条、几条做完了没归档",
-    lastNotice(session)?.text.includes("活跃需求 1 条（其中 1 条已完成未归档），用 tree_task_status 查看。"),
+  check("通告只讲折叠，不提示还有几条需求",
+    lastNotice(session) !== null && !lastNotice(session)?.text.includes("活跃需求"),
     JSON.stringify(lastNotice(session)?.text));
-  check("没有需求时不硬塞这一句", activePointerIsSilent());
+  check("没有需求时也没有这句", activePointerIsSilent());
 
   function activePointerIsSilent() {
     const other = makeSession();
@@ -772,7 +775,7 @@ console.log("\n场景 20 · start 折叠：第一次从上一条边界之后起"
     typeof cursors.foldedAt === "number" && cursors.foldedAt === lastNotice(session)?.seq,
     JSON.stringify(cursors),
   );
-  check("收走 create 与 start 之间的 6 条", lastNotice(session)?.text === "tree_task消息：隐藏了6条过程上下文。", JSON.stringify(lastNotice(session)?.text));
+  check("收走 create 与 start 之间的 6 条", lastNotice(session)?.text === "tree_task消息：此处隐藏了6条过程上下文。", JSON.stringify(lastNotice(session)?.text));
   check("create 与 start 的调用返回都还在", session.live().includes(c.call) && session.live().includes(s1.call) && session.live().includes(s1.result));
 }
 
@@ -800,7 +803,7 @@ console.log("\n场景 21 · 第二次 start：从上次折叠成功的通告之�
   check(
     "折上次折叠之后的 10 条（含上一次 start 的调用与返回——它们也在那次折叠之后）",
     foldOnce(ctx, session, null, null, cursors) === true &&
-      lastNotice(session)?.text === "tree_task消息：隐藏了10条过程上下文。",
+      lastNotice(session)?.text === "tree_task消息：此处隐藏了10条过程上下文。",
     JSON.stringify(lastNotice(session)?.text),
   );
   check("这一次 start 的调用与返回都还在", session.live().includes(s2.call) && session.live().includes(s2.result));
@@ -852,7 +855,7 @@ console.log("\n场景 23 · done 从上一个边界（start）之后折");
   const range = foldRange(session);
   check("起点在上一个边界 start 的返回之后", range !== null && range.from === live.indexOf(s1.result) + 1, JSON.stringify(range));
   check("终点在 done 调用之前", range !== null && range.to === live.indexOf(d.call) - 1);
-  check("折掉 10 条（过程 + plan + 过程）", foldOnce(ctx, session) === true && lastNotice(session)?.text === "tree_task消息：隐藏了10条过程上下文。", JSON.stringify(lastNotice(session)?.text));
+  check("折掉 10 条（过程 + plan + 过程）", foldOnce(ctx, session) === true && lastNotice(session)?.text === "tree_task消息：此处隐藏了10条过程上下文。", JSON.stringify(lastNotice(session)?.text));
   check("start 与 done 的调用返回都还在", [s1, d].every((each) => session.live().includes(each.call) && session.live().includes(each.result)));
 }
 
