@@ -3,9 +3,9 @@
  *
  * 钉住的规则（纯表层、与计划树无关）：
  *
- *   起点 = 「上一次 `tree_task_done` 之后的第一个 `create` / `plan`」之后；
- *   更早没有 done 时起点取表层第一个 create / plan，区间里一次 create / plan 都没有时
- *   回退到上一次 done 之后。终点 = 本次 `tree_task_done` 的调用之前。
+ *   终点 = 本次 `tree_task_done` 的调用之前；`tree_task_start` 只记位置，不触发折叠。
+ *   起点 = 这次 done 之前的上一个边界调用（`done` / `start` / `create`）；
+ *   完成的是需求时，起点退到这条需求开工那次 `create`（上一次需求完成之后最早的那次）。
  *   中间的 create / plan **不是切点**——它们连同过程一起收走。
  *   判定表见 `docs/06-折叠范围规则.md`。
  *
@@ -15,7 +15,7 @@
  *   2. 被跨过的 create / plan 的调用与返回随过程一起收走；
  *   3. 中间夹着真人消息就**整段不折**——往前折丢需求，往后折丢回应；
  *   4. 区间为空（create 与 done 紧邻、两次 done 紧邻）就**什么都不注入**；
- *   5. 末尾最近的那次边界调用不是 done（比如刚调完 plan）就不折。
+ *   5. 末尾最近的那次边界调用不是 done（比如刚调完 plan 或 start）就不折。
  *
  * 假 session 忠实复刻 DSH 的三条硬规则，否则测出来的东西不算数：
  *
@@ -750,113 +750,112 @@ console.log("\n场景 19 · 通告不带活跃需求指针");
 
 // ---------------------------------------------------------------- 场景 20
 
-console.log("\n场景 20 · start 折叠：第一次从上一条边界之后起");
+console.log("\n场景 20 · start 只记录位置，不触发折叠");
+{
+  const session = makeSession();
+  boot(session);
+  create(session, "c1");
+  work(session, 3);
+  const s1 = start(session, "s1");
+
+  check("start 之后没有 done：这一轮不折", foldRange(session) === null, JSON.stringify(foldRange(session)));
+  check("折一次也不会插通告", foldOnce(ctx, session) === false && countNotices(session) === 0);
+  check("start 的调用与返回都在", session.live().includes(s1.call) && session.live().includes(s1.result));
+}
+
+// ---------------------------------------------------------------- 场景 21
+
+console.log("\n场景 21 · start 之后的第一次 done：从 start 折到 done");
 {
   const session = makeSession();
   boot(session);
   const c = create(session, "c1");
   work(session, 3);
   const s1 = start(session, "s1");
-  const live = session.live();
-
-  const range = foldRange(session);
-  check("start 触发折叠", range !== null && range.trigger === "start", JSON.stringify(range));
-  check(
-    "第一次 start：起点落在 create 的返回之后",
-    range !== null && range.from === live.indexOf(c.result) + 1,
-    `range=${JSON.stringify(range)}`,
-  );
-  check("终点在 start 调用之前", range !== null && range.to === live.indexOf(s1.call) - 1);
-
-  const cursors = {};
-  check("折成功", foldOnce(ctx, session, null, null, cursors) === true);
-  check(
-    "折叠成功的游标记成刚插进去的那条通告",
-    typeof cursors.foldedAt === "number" && cursors.foldedAt === lastNotice(session)?.seq,
-    JSON.stringify(cursors),
-  );
-  check("收走 create 与 start 之间的 6 条", lastNotice(session)?.text === "tree_task消息：此处隐藏了6条过程上下文。", JSON.stringify(lastNotice(session)?.text));
-  check("create 与 start 的调用返回都还在", session.live().includes(c.call) && session.live().includes(s1.call) && session.live().includes(s1.result));
-}
-
-// ---------------------------------------------------------------- 场景 21
-
-console.log("\n场景 21 · 第二次 start：从上次折叠成功的通告之后起");
-{
-  const session = makeSession();
-  boot(session);
-  create(session, "c1");
-  work(session, 3);
-  start(session, "s1");
-  const cursors = {};
-  foldOnce(ctx, session, null, null, cursors);
-  const notice = lastNotice(session);
-
-  work(session, 4);
-  const s2 = start(session, "s2");
-  const range = foldRange(session, null, cursors);
-  check(
-    "起点是那条通告之后，不是更早的边界",
-    range !== null && range.from === session.live().indexOf(notice.seq) + 1,
-    JSON.stringify(range),
-  );
-  check(
-    "折上次折叠之后的 10 条（含上一次 start 的调用与返回——它们也在那次折叠之后）",
-    foldOnce(ctx, session, null, null, cursors) === true &&
-      lastNotice(session)?.text === "tree_task消息：此处隐藏了10条过程上下文。",
-    JSON.stringify(lastNotice(session)?.text),
-  );
-  check("这一次 start 的调用与返回都还在", session.live().includes(s2.call) && session.live().includes(s2.result));
-}
-
-// ---------------------------------------------------------------- 场景 22
-
-console.log("\n场景 22 · 被挡一次不算数：下一次 start 把它补回来");
-{
-  const session = makeSession();
-  boot(session);
-  create(session, "c1");
-  work(session, 2);
-  const said = humanSay(session, "顺便说一句");
-  work(session, 2);
-  const s1 = start(session, "s1");
-  const cursors = {};
-
-  check("区间接上真人消息，被挡住", previewFold(session, null, cursors).blocked?.seq === said);
-  check("挡住就不折", foldOnce(ctx, session, null, null, cursors) === false && countNotices(session) === 0);
-  check("游标没动（没折成功就不算折过）", cursors.foldedAt === undefined, JSON.stringify(cursors));
-
-  // 模型把用户的话写进需求，再开一次工。
-  toolCall(session, "tree_task_requirement", { id: "R1", action: "update", detail: "顺便说一句" }, "u1");
-  const s2 = start(session, "s2");
-  const range = foldRange(session, null, cursors);
-  check("这次不挡了", previewFold(session, null, cursors).blocked === null);
-  check("起点退回 create 的返回之后（把被挡的那段一起补上）", range !== null && range.from > 0 && range.from <= session.live().indexOf(said), JSON.stringify(range));
-  check("折成功", foldOnce(ctx, session, null, null, cursors) === true);
-  check("被挡的那条用户消息这次收走了", !session.live().includes(said), JSON.stringify(session.live()));
-  check("离得最近的那次 start 的调用返回还在", session.live().includes(s2.call) && session.live().includes(s2.result));
-  check("中间那次 start 的调用也随过程收走", !session.live().includes(s1.call), JSON.stringify(session.live()));
-}
-
-// ---------------------------------------------------------------- 场景 23
-
-console.log("\n场景 23 · done 从上一个边界（start）之后折");
-{
-  const session = makeSession();
-  boot(session);
-  create(session, "c1");
-  const s1 = start(session, "s1");
-  work(session, 2);
-  plan(session, "p1");
   work(session, 2);
   const d = doneFor(session, "t-1", "d1");
   const live = session.live();
 
   const range = foldRange(session);
-  check("起点在上一个边界 start 的返回之后", range !== null && range.from === live.indexOf(s1.result) + 1, JSON.stringify(range));
+  check(
+    "起点在 start 的返回之后",
+    range !== null && range.from === live.indexOf(s1.result) + 1,
+    `range=${JSON.stringify(range)}`,
+  );
   check("终点在 done 调用之前", range !== null && range.to === live.indexOf(d.call) - 1);
-  check("折掉 10 条（过程 + plan + 过程）", foldOnce(ctx, session) === true && lastNotice(session)?.text === "tree_task消息：此处隐藏了10条过程上下文。", JSON.stringify(lastNotice(session)?.text));
-  check("start 与 done 的调用返回都还在", [s1, d].every((each) => session.live().includes(each.call) && session.live().includes(each.result)));
+  check(
+    "收走 start 之后的 4 条",
+    foldOnce(ctx, session) === true && lastNotice(session)?.text === "tree_task消息：此处隐藏了4条过程上下文。",
+    JSON.stringify(lastNotice(session)?.text),
+  );
+  check(
+    "start 与 done 的调用返回都在",
+    [s1, d].every((each) => session.live().includes(each.call) && session.live().includes(each.result)),
+  );
+  check("create 没有进区间", session.live().includes(c.call) && session.live().includes(c.result));
+}
+
+// ---------------------------------------------------------------- 场景 22
+
+console.log("\n场景 22 · 需求完成时把 start 之前那段一起收走");
+{
+  const session = makeSession();
+  boot(session);
+  const c = create(session, "c1");
+  work(session, 2);
+  const s1 = start(session, "s1");
+  work(session, 2);
+  doneFor(session, "t-1", "d1");
+  foldOnce(ctx, session);
+  const mid = lastNotice(session);
+
+  work(session, 2);
+  const d2 = doneFor(session, "R1", "d2");
+  const range = foldRange(session, planWith());
+  check(
+    "起点退到这条需求开工的那次 create",
+    range !== null && range.from === session.live().indexOf(c.result) + 1,
+    `range=${JSON.stringify(range)}`,
+  );
+  check("中间那条任务级通告也在区间里", range !== null && range.shadowed.includes(mid.seq));
+
+  foldOnce(ctx, session, planWith());
+  check("收完只剩一条通告", countNotices(session) === 1, `surface = ${JSON.stringify(session.live())}`);
+  check(
+    "create 与需求 done 的调用返回都还在",
+    [c, d2].every((each) => session.live().includes(each.call) && session.live().includes(each.result)),
+  );
+  check("start 的调用随过程收走", !session.live().includes(s1.call));
+}
+
+// ---------------------------------------------------------------- 场景 23
+
+console.log("\n场景 23 · 被挡的段落等需求完成时补收");
+{
+  const session = makeSession();
+  boot(session);
+  const c = create(session, "c1");
+  work(session, 2);
+  const said = humanSay(session, "改成深色");
+  work(session, 2);
+  doneFor(session, "t-1", "d1");
+  check("被挡：普通 done 不折", foldOnce(ctx, session, planWith()) === false && countNotices(session) === 0);
+
+  writeRequirement(session, "update", "w1");
+  work(session, 1);
+  const d2 = doneFor(session, "R1", "d2");
+  check(
+    "需求完成时区间里写过需求，不挡",
+    previewFold(session, planWith()).blocked === null,
+    JSON.stringify(previewFold(session, planWith())),
+  );
+  check("照折", foldOnce(ctx, session, planWith()) === true);
+  check("用户消息被收走", !session.live().includes(said));
+  check("只剩一条通告", countNotices(session) === 1);
+  check(
+    "create 与需求 done 的调用返回还在",
+    [c, d2].every((each) => session.live().includes(each.call) && session.live().includes(each.result)),
+  );
 }
 
 // ---------------------------------------------------------------- 汇总
