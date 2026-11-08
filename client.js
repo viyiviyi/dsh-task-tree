@@ -1,30 +1,29 @@
 /**
- * dsh-tree-task-flow 的客户端：输入框上方的树形任务流条目。
+ * dsh-tree-task-flow 的客户端：输入框上方的需求条。
  *
- * 这是**手写**的模块包装格式（和 dsh-purge 的 client.js 一样），不经过打包，
- * 所以用 `h()` 而不是 JSX。
+ * 这是**手写**的模块包装格式，不经过打包，所以用 `h()` 而不是 JSX。
  *
  * 挂载点是 `conversation.input.dock`——输入框上方的全宽条目区，内置的任务清单
- * （`todo`）与目标（`goal`）就在那里。这是一个 `list` 槽：**用自己的 id 注册就
- * 会并列加在它们旁边**，不会替换任何一个；用内置的 id 才会顶掉它。
+ * （`todo`）与目标（`goal`）就在那里。这是一个 `list` 槽：用自己的 id 注册就会
+ * 并列加在它们旁边，不会替换任何一个。
  *
- * 外观照内置条目来：收起时是目标条（GoalBar）那样的 36px 单行条，展开后是待办
- * 面板（TodoPanel）那样的卡片。图标与 Tooltip 直接用外壳播种的 UI 基座
- * `@deepseek-ai/dsh-client-ui-primitives`，尺寸与颜色变量也都取它那一套，
- * 这样并排放在输入框上方时看起来是一家。
+ * 这一条只管三件事（见 `docs/09-需求与任务模型.md` §5）：
  *
- * 没有计划的会话**一个像素都不占**：读不到计划就返回 null，免得平白挤掉内置条目。
+ *   1. **看**：需求两个列表（活跃 / 已归档）+ 待确认的草稿，当前进行中的那条就地
+ *      展开成任务与步骤；
+ *   2. **改**：用户改需求正文（标题 / 简介 / 详情）→ 点「确认变更」→ 落成**暂定版本**，
+ *      等 AI 确认。改的时候**不动**正在生效的正文；
+ *   3. **开始**：点某条需求的「开始」——这是能叫醒 AI 的三种动作之一（另外两种是
+ *      点「继续」与直接发消息）。
  *
- * 数据全部来自 host 端的 `/dsh-tree-task-flow/*` 接口；动作（暂停 / 继续 / 完成 /
- * 丢弃 / 清空）都是 POST 回 host，由 host 改真正的文件和 agent 状态。
+ * **归档按钮有一个刻意的延迟**：点了之后这一行**不动**，按钮变成「取消归档」，
+ * 反悔点一下就回去了；下次打开面板才按新状态重新分列表。防误点优先于即时一致。
  *
- * 「暂停」不是只停掉自动续行，而是**真的把会话按住**：host 侧在模型发起下一次
- * 请求之前等一个闸门，所以当前正在执行的工具会正常跑完，之后什么都不干；点
- * 「继续」就放行，模型从原处接着跑，整个过程不往会话里插任何消息。
+ * 没有需求的会话**一个像素都不占**：读不到就返回 null，免得平白挤掉内置条目。
  *
- * 「完成」必须带结果，所以它不是一步按钮：先在节点下展开一个输入框，写清产出了
- * 什么，再提交。结果一旦提交，这个节点整段执行过程就会被它顶替，所以输入框的
- * 提示语要把这一点讲明白。
+ * 另外挂在插件管理的**本插件自己的配置页** `plugins.bundle.config`（按 bundle 的
+ * 包名 `dsh-tree-task-flow` 作 key）——不是 DSH 设置面板里的一页标签：设置属于
+ * 这个插件，就该长在插件自己身上，从「插件」页点进这个 bundle 才看得到。
  */
 window.__ModuleLoader__.load({
 	id: "dsh-tree-task-flow",
@@ -42,6 +41,11 @@ window.__ModuleLoader__.load({
 		const NS = "dsh-tree-task-flow";
 		/** 条目 id。用自己的 id，所以只会加在内置条目旁边。 */
 		const ENTRY_ID = "dsh-tree-task-flow";
+		/**
+		 * 本插件作为 bundle 的包名——`plugins.bundle.config` 的 key 用它，
+		 * 跟 locale 命名空间 `NS` 是两个不同的字符串（那是文案的命名空间）。
+		 */
+		const BUNDLE_PACKAGE = "dsh-tree-task-flow";
 
 		let translate = (key) => key;
 		const useT = () => translate;
@@ -49,10 +53,8 @@ window.__ModuleLoader__.load({
 		// ------------------------------------------------------------ 内置基座
 
 		/**
-		 * 内置 UI 基座。外壳启动时把这张表播种进模块表（react、cordis、store、
-		 * slots、primitives、dockkit），所以这里的 require 正常一定成功；
-		 * 仍然兜一层 try——万一这版外壳没有 primitives，条目该降级成文字，
-		 * 而不是整块白掉。
+		 * 内置 UI 基座。外壳启动时把这张表播种进模块表，所以这里的 require 正常一定
+		 * 成功；仍然兜一层 try——万一这版外壳没有 primitives，条目该降级成文字。
 		 */
 		let primitives = {};
 		try {
@@ -61,14 +63,6 @@ window.__ModuleLoader__.load({
 			primitives = {};
 		}
 
-		/**
-		 * 内置图标名有两套写法，这里两套都认。
-		 *
-		 * 旧外壳把尺寸写进名字：`IconCheckOutline16`、`IconChevronDownOutline14`；
-		 * 升级后的外壳把名字里的尺寸换成笔画粗细：`IconCheckOutlineRegular`、
-		 * `IconCheckOutlineMedium`，尺寸改由 `size` 属性给。按「尺寸后缀 → 粗细后缀
-		 * → 裸名」的顺序找，两套外壳都取得回图标，不会平白降级成文字。
-		 */
 		function findIcon(base, size) {
 			const candidates = [base + size, base + "14", base + "16", base + "Regular", base + "Medium", base];
 			for (const candidate of candidates) {
@@ -78,26 +72,18 @@ window.__ModuleLoader__.load({
 			return null;
 		}
 
-		/** 取一个内置图标；这版外壳没有就返回 null，由调用方决定怎么退。 */
 		function icon(base, size) {
 			const component = findIcon(base, size);
 			if (component === null) return null;
 			return h(component, { size });
 		}
 
-		/** 用内置 Tooltip 包一层；没有 Tooltip 就原样返回。 */
 		function withTooltip(label, node) {
 			const Tooltip = primitives.Tooltip;
 			if (typeof Tooltip !== "function") return node;
 			return h(Tooltip, { label, side: "bottom", delayMs: 500 }, node);
 		}
 
-		/**
-		 * 图标按钮：有图标用图标，没图标退回短文字，保证永远点得到。
-		 *
-		 * 退回文字时换成 `dsh-ttf-iconBtnText`：按钮按文字宽度自己撑开、文字长了
-		 * 用省略号收住，所以并排的几个按钮不会挤成一团互相压。
-		 */
 		function IconButton({ iconBase, label, size, disabled, onClick }) {
 			const glyph = icon(iconBase, typeof size === "number" ? size : 16);
 			return withTooltip(
@@ -136,23 +122,17 @@ window.__ModuleLoader__.load({
 			try {
 				data = text ? JSON.parse(text) : null;
 			} catch {
-				throw new Error(
-					response.status + " 返回了非 JSON：" + String(text).slice(0, 120),
-				);
+				throw new Error(response.status + " 返回了非 JSON：" + String(text).slice(0, 120));
 			}
 			if (!response.ok) {
 				const error = new Error((data && data.error) || response.status + " " + response.statusText);
-				// 调用方要能区分「这个会话没有计划」（正常）与真出错。
 				error.status = response.status;
 				throw error;
 			}
 			return data;
 		}
 
-		/**
-		 * 写操作。host 用 HTTP 200 携带 `{ ok: false, error }` 表示业务拒绝
-		 * （比如完成时没给结果），所以这里要把 `ok` 也当错误判一次。
-		 */
+		/** 写操作。host 用 HTTP 200 携带 `{ ok: false, error }` 表示业务拒绝，所以要把 ok 也判一次。 */
 		async function post(body) {
 			const data = await api("/dsh-tree-task-flow/action", {
 				method: "POST",
@@ -163,28 +143,23 @@ window.__ModuleLoader__.load({
 			return data;
 		}
 
-		function formatTime(at) {
-			const n = Number(at);
-			if (!n) return "";
-			try {
-				return new Date(n).toLocaleString();
-			} catch {
-				return "";
-			}
+		// ---------------------------------------------------------------- 数据
+
+		/** 面板要的三组数据；接口缺字段时一律当空，不让界面炸。 */
+		function listsOf(data) {
+			const lists = (data && data.requirements) || {};
+			return {
+				active: Array.isArray(lists.active) ? lists.active : [],
+				archived: Array.isArray(lists.archived) ? lists.archived : [],
+				drafts: Array.isArray(lists.drafts) ? lists.drafts : [],
+			};
 		}
 
-		/**
-		 * 三层节点总数与已完成数，给单行条上的进度用。
-		 *
-		 * **丢弃的节点两边都不算。** 丢弃是"这件事我不做了"，它不该压着进度——
-		 * 早先 total 无条件 +1、done 只认 `done`，于是丢一个节点进度就永远差一格，
-		 * 满不了。丢弃的证据在树里（划掉那一行），不需要分数再替它记一笔。
-		 */
-		function countNodes(goal) {
-			if (goal.status === "dropped") return { total: 0, done: 0 };
-			let total = 1;
-			let done = goal.status === "done" ? 1 : 0;
-			for (const task of goal.tasks || []) {
+		/** 一条需求的进度分数：任务与步骤都算，放弃的两边都不算。 */
+		function countOf(row) {
+			let total = 0;
+			let done = 0;
+			for (const task of row.tasks || []) {
 				if (task.status === "dropped") continue;
 				total += 1;
 				if (task.status === "done") done += 1;
@@ -197,60 +172,12 @@ window.__ModuleLoader__.load({
 			return { total, done };
 		}
 
-		/** 计划里的全部目标。一个会话可以有多个目标，它们是最外层的兄弟。 */
-		function goalsOf(data) {
-			return data?.plan?.goals || [];
-		}
-
-		/** 当前该盯着哪个目标：活动路径上的那个；没有就取第一个还没结束的，再退到最后一个。 */
-		function focusGoal(data) {
-			const goals = goalsOf(data);
-			if (goals.length === 0) return null;
-			const here = goals.find((each) => each.id === data?.active?.goalId);
-			if (here) return here;
-			return (
-				goals.find((each) => each.status !== "done" && each.status !== "dropped") ||
-				goals[goals.length - 1]
-			);
-		}
-
-		/** 当前活动节点的标题：子任务优先，其次任务，最后目标。 */
-		function currentLabel(data) {
-			const active = data.active;
-			if (!active) return "";
-			const goal = focusGoal(data);
-			if (!goal) return "";
-			const task = (goal.tasks || []).find((each) => each.id === active.taskId);
-			if (!task) return goal.title;
-			const step = (task.steps || []).find((each) => each.id === active.stepId);
-			return step ? step.title : task.title;
-		}
-
-		/** 活动路径上三层各自的 id。节点 id 全局唯一，所以一个集合就够判"是不是当前节点"。 */
-		function currentIds(data) {
-			const active = data.active;
-			return new Set(
-				[active?.goalId, active?.taskId, active?.stepId].filter(
-					(each) => typeof each === "string" && each !== "",
-				),
-			);
-		}
-
-		/**
-		 * 面板一打开该摊开哪些节点：活动路径上的三层，加上检查点节点以及它的祖先。
-		 *
-		 * 其余节点一律收起——正在走的那条路径本来就窄，摊平整棵树只会让人翻半天。
-		 * 检查点落在某个任务上时，目标也得一起摊开，否则连那一行都看不见。
-		 */
-		function defaultOpenIds(data) {
-			const ids = currentIds(data);
-			const checkpoint = data.checkpoint;
-			if (checkpoint !== null && checkpoint !== undefined && typeof checkpoint.id === "string") {
-				ids.add(checkpoint.id);
-				const goalId = focusGoal(data)?.id;
-				if (checkpoint.level !== "goal" && typeof goalId === "string") ids.add(goalId);
-			}
-			return ids;
+		/** 状态的显示名。 */
+		function statusKey(status) {
+			if (status === "draft") return "status.draft";
+			if (status === "done") return "status.done";
+			if (status === "dropped") return "status.dropped";
+			return "status.open";
 		}
 
 		// ---------------------------------------------------------------- 文案
@@ -259,23 +186,42 @@ window.__ModuleLoader__.load({
 			nav: "树形任务流",
 			"state.running": "进行中",
 			"state.paused": "已暂停",
-			"state.done": "已全部完成",
-			"state.checkpoint": "检查点",
-			"checkpoint.note": "「{title}」的子节点已全部结束。要么继续给它拆子节点，要么提交结果并完成它。",
-			"note.paused": "已暂停：正在跑的工具会跑完，之后不再往下走。点「继续」从原处接着跑，不会往会话里插消息。",
+			"state.idle": "待开始",
+			"status.open": "未完成",
+			"status.done": "已完成",
+			"status.dropped": "已放弃",
+			"status.draft": "草稿",
+			"label.requirements": "{count} 条需求",
+			"label.archived": "已归档",
+			"label.drafts": "待确认",
+			"label.current": "当前",
+			"label.missing": "缺前置",
+			"label.pending": "待确认变动",
+			"label.detail": "详情",
+			"label.tasks": "任务",
+			"label.summary": "总结",
 			"action.pause": "暂停",
 			"action.resume": "继续",
-			"action.reset": "清空计划",
 			"action.expand": "展开",
 			"action.collapse": "收起",
-			"action.done": "完成…",
-			"action.drop": "丢弃",
-			"action.delete": "删除",
-			"action.submit": "提交结果",
-			"action.expandResult": "展开看全文",
-			"action.collapseResult": "收起",
+			"action.start": "开始这条需求",
+			"action.archive": "归档",
+			"action.unarchive": "取消归档",
+			"action.open": "看详情",
+			"action.edit": "改需求",
+			"action.submitChange": "确认变更",
+			"action.newRequirement": "新建需求",
+			"action.add": "记下来",
 			"action.cancel": "取消",
-			"settings.nav": "树形任务流",
+			"note.paused": "已暂停：正在跑的工具会跑完，之后不再往下走。点「继续」从原处接着跑。",
+			"note.archiveDeferred": "点了不会立刻移动：这一行留在原地，下次打开面板才按新状态分开。反悔就再点一下。",
+			"note.draft": "草稿还不算真需求。跟 AI 把「要什么」说清楚，它确认之后才会转正。",
+			"note.pending": "这条需求有用户提交的改动，等 AI 确认。确认之前仍按旧版本走。",
+			"note.edit": "改完点「确认变更」提交成暂定版本，AI 确认之后才生效。",
+			"note.noTasks": "还没有任务，让 AI 拆。",
+			"placeholder.title": "一句话说清要做什么（不超过 50 字）",
+			"placeholder.intro": "简介（不超过 200 字）",
+			"placeholder.detail": "详情，可以很长",
 			"settings.loading": "正在读设置…",
 			"settings.unavailable": "读不到设置：宿主那一半没在跑，或者接口不通。",
 			"settings.off": "插件在 profile 配置里被关掉了（enabled: false），这两个开关现在不起作用。",
@@ -283,45 +229,49 @@ window.__ModuleLoader__.load({
 			"setting.autoContinue": "任务没做完、模型自己停下时，自动把它叫起来接着跑",
 			"setting.autoContinueNote": "会往会话里推一条消息。默认关。",
 			"setting.interruptRecovery": "工具出错或网络断了，自动重试把会话拉起来",
-			"setting.interruptRecoveryNote":
-				"按 1 / 5 / 10 / 30 分钟各拉一次，一直拉不起来就停手。你按过停止的绝不拉起。",
-			"label.result": "结果",
-			"label.noResult": "（还没提交结果）",
-			"label.current": "当前",
-			"label.checkpointHere": "检查点",
-			"label.goals": "{count} 个目标",
-			"placeholder.result":
-				"写清这个节点产出了什么。它整段执行过程会被这条结果顶替，所以要能独立看懂。",
-			"hint.noChildren": "（还没有子节点 → 让模型调用 tree_task_plan）",
-			"confirm.reset": "确定要清空这个会话的计划树吗？",
-			"confirm.drop": "确定要丢弃「{title}」吗？丢弃会把它标成「不做了」，节点留在树里可查。",
-			"confirm.delete":
-				"确定要删除「{title}」吗？它会连同下面的任务或子任务一起从树里消失，找不回来；已经提交的结果也会一起没掉。如果只是「这件事不做了」，请改用丢弃。",
+			"setting.interruptRecoveryNote": "按 1 / 5 / 10 / 30 分钟各拉一次，一直拉不起来就停手。你按过停止的绝不拉起。",
 		};
 
 		const en = {
-			nav: "Tree Task Flow",
+			nav: "Task tree",
 			"state.running": "In progress",
 			"state.paused": "Paused",
-			"state.done": "All done",
-			"state.checkpoint": "Checkpoint",
-			"checkpoint.note":
-				"Every child of “{title}” has finished. Either break out more children, or submit its result and complete it.",
-			"note.paused":
-				"Paused: the running tool finishes, then nothing else happens. Resume picks up exactly where it stopped, without inserting any message.",
+			"state.idle": "Not started",
+			"status.open": "Open",
+			"status.done": "Done",
+			"status.dropped": "Dropped",
+			"status.draft": "Draft",
+			"label.requirements": "{count} requirements",
+			"label.archived": "Archived",
+			"label.drafts": "Waiting for you",
+			"label.current": "current",
+			"label.missing": "waiting on",
+			"label.pending": "pending change",
+			"label.detail": "Detail",
+			"label.tasks": "Tasks",
+			"label.summary": "Summary",
 			"action.pause": "Pause",
 			"action.resume": "Resume",
-			"action.reset": "Clear plan",
 			"action.expand": "Expand",
 			"action.collapse": "Collapse",
-			"action.done": "Complete…",
-			"action.drop": "Drop",
-			"action.delete": "Delete",
-			"action.submit": "Submit result",
-			"action.expandResult": "Show the full result",
-			"action.collapseResult": "Collapse",
+			"action.start": "Start this requirement",
+			"action.archive": "Archive",
+			"action.unarchive": "Unarchive",
+			"action.open": "Show detail",
+			"action.edit": "Edit",
+			"action.submitChange": "Submit change",
+			"action.newRequirement": "New requirement",
+			"action.add": "Save",
 			"action.cancel": "Cancel",
-			"settings.nav": "Task tree",
+			"note.paused": "Paused: the running tool finishes, then nothing else happens. Resume picks up exactly where it stopped.",
+			"note.archiveDeferred": "Nothing moves right away: the row stays put and the next time you open the panel it shows up in the other list. Click again to undo.",
+			"note.draft": "A draft is not a requirement yet. Describe what you want to the model; it becomes real once confirmed.",
+			"note.pending": "This requirement has a change submitted by you, waiting for the model to confirm. The old version is still in force.",
+			"note.edit": "Submit the change and it becomes a provisional version; it takes effect once the model confirms it.",
+			"note.noTasks": "No tasks yet — the model breaks it down.",
+			"placeholder.title": "One line: what should be done (<= 50 chars)",
+			"placeholder.intro": "Short intro (<= 200 chars)",
+			"placeholder.detail": "Detail, may be long",
 			"settings.loading": "Reading settings…",
 			"settings.unavailable": "Settings are unreachable: the host half is not running, or the endpoint is blocked.",
 			"settings.off": "The plugin is switched off in the profile config (enabled: false), so these switches do nothing right now.",
@@ -329,37 +279,21 @@ window.__ModuleLoader__.load({
 			"setting.autoContinue": "When the plan is unfinished and the model stops, wake it up to carry on",
 			"setting.autoContinueNote": "This pushes a message into the session. Off by default.",
 			"setting.interruptRecovery": "After a tool error or a dropped connection, retry to get the session going",
-			"setting.interruptRecoveryNote":
-				"Retries at 1 / 5 / 10 / 30 minutes, then gives up. A session you stopped is never revived.",
-			"label.result": "Result",
-			"label.noResult": "(no result submitted yet)",
-			"label.current": "current",
-			"label.checkpointHere": "checkpoint",
-			"label.goals": "{count} goals",
-			"placeholder.result":
-				"State what this node produced. Its whole execution range is replaced by this result, so it must stand on its own.",
-			"hint.noChildren": "(no children yet → ask the model to call tree_task_plan)",
-			"confirm.reset": "Clear this session's plan tree?",
-			"confirm.drop": "Drop “{title}”? It is marked as not-to-do and stays in the tree.",
-			"confirm.delete":
-				"Delete “{title}”? It disappears from the tree together with its tasks or steps, and any submitted result goes with it. If you only mean “not doing this”, use Drop instead.",
+			"setting.interruptRecoveryNote": "Retries at 1 / 5 / 10 / 30 minutes, then gives up. A session you stopped is never revived.",
 		};
+
+		/** 插件配置页上的两个开关。 */
+		const SETTING_ROWS = [
+			{ key: "autoContinue", note: "setting.autoContinueNote" },
+			{ key: "interruptRecovery", note: "setting.interruptRecoveryNote" },
+		];
 
 		// ---------------------------------------------------------------- 样式
 
-		/**
-		 * 样式照内置的 dock 条目写：宽高、间距、圆角、颜色变量都取
-		 * `dsh-client-ui-goal` 的 GoalBar 与内置待办面板 TodoPanel 的同一套值。
-		 *
-		 * 注入方式也照它们：一个带 `data-plugin-css` 的 <style> 标签——
-		 * 客户端 HMR 就是靠这个属性在插件卸载时收走样式的。
-		 */
-		const CSS_TAG = "dsh-tree-task-flow/Dock.module.css";
-
 		const CSS = [
-			// 条目外壳：宽度算法与内置 goal / todo 条目完全一致，否则会和消息正文对不齐。
+			// 外壳与宽度：**必须照抄内置条目的宽度公式**。漏掉它，这一条会按父容器的
+			// 宽度铺满整个输入区（实测就是这样占满全屏的）。
 			".dsh-ttf-dock{box-sizing:border-box;width:calc(100% - var(--dsh-composer-side-clearance) - var(--dsh-composer-side-clearance) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset));max-width:calc(var(--dsh-composer-card-max-width) - 4 * var(--dsh-composer-dock-inset));margin:0 auto;flex:none;--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)}",
-			// 卡片：背景与圆角同内置条目，描边用 ::after 画（.5px 在缩放屏上才不糊）。
 			".dsh-ttf-panel{background:var(--dsw-specific-tip);border-radius:12px;position:relative;overflow:hidden}",
 			'.dsh-ttf-panel:after{border:.5px solid var(--dsw-alias-border-l1);border-radius:inherit;content:"";pointer-events:none;position:absolute;inset:0}',
 			".dsh-ttf-bar{box-sizing:border-box;width:100%;height:36px;display:flex;align-items:center;gap:10px;padding:4px 5px 4px 12px}",
@@ -370,220 +304,346 @@ window.__ModuleLoader__.load({
 			".dsh-ttf-title{min-width:0;flex:1;color:var(--dsw-alias-label-primary-dimmed);font-size:13px;line-height:20px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
 			".dsh-ttf-progress{flex:none;max-width:45%;min-width:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:20px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
 			".dsh-ttf-actions{flex:none;display:flex;align-items:center;gap:2px}",
-			".dsh-ttf-iconBtn{corner-shape:round;width:28px;height:28px;border:none;background:0 0;border-radius:999px;color:var(--dsw-alias-label-tertiary);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;font:inherit;flex:none}",
-			".dsh-ttf-iconBtn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}",
+			".dsh-ttf-iconBtn{width:28px;height:28px;border:none;background:0 0;border-radius:999px;color:var(--dsw-alias-label-tertiary);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;font:inherit;flex:none}",
+			".dsh-ttf-iconBtn:hover:enabled{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}",
 			".dsh-ttf-iconBtn:disabled{opacity:.4;cursor:default}",
-			".dsh-ttf-iconBtn:disabled:hover{background:0 0;color:var(--dsw-alias-label-tertiary)}",
-			// 取不到内置图标时退回文字：固定 28px 宽装不下几个字，文字会溢出到相邻
-			// 按钮上，看着就是几个按钮叠在一起。这里按文字宽度撑开、留出边距，
-			// 并给一个上限，长了用省略号收住——几个按钮始终各占各的位置。
 			".dsh-ttf-iconBtnText{width:auto;min-width:28px;max-width:112px;height:24px;padding:0 8px}",
 			".dsh-ttf-iconText{min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;font-size:12px;line-height:16px;white-space:nowrap}",
-			// 展开体：限高滚动——这是输入框旁边的位置，不能让它把会话挤没了。
 			".dsh-ttf-body{max-height:264px;overflow-y:auto;padding:2px 8px 8px}",
 			".dsh-ttf-note{margin:4px 4px 6px;padding:6px 8px;border-radius:8px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-module-platform)}",
-			// 节点行：行高与 hover 背景照内置待办面板。
-			// 一个节点。行本身跟着标题长，标记与按钮对齐第一行。
-			".dsh-ttf-node{position:relative}",
-			// 同一层的相邻节点之间画一条分界线——任务与任务的分界就靠它。
-			".dsh-ttf-node+.dsh-ttf-node{border-top:1px solid var(--dsw-alias-border-l1);margin-top:2px;padding-top:2px}",
-			".dsh-ttf-row{position:relative;box-sizing:border-box;display:flex;align-items:flex-start;gap:8px;padding:6px 4px;border-radius:8px;color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px}",
+			".dsh-ttf-section{margin:8px 4px 2px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}",
+			".dsh-ttf-row{position:relative;box-sizing:border-box;display:flex;flex-direction:column;gap:2px;padding:6px 4px;border-radius:8px;color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px}",
 			".dsh-ttf-row:hover{background:var(--dsw-alias-interactive-bg-hover)}",
-			".dsh-ttf-row:hover{background:var(--dsw-alias-interactive-bg-hover)}",
-			// 标题不缩略：有多长写多长，多了换行。
-			".dsh-ttf-rowTitle{min-width:0;flex:1;white-space:pre-wrap;word-break:break-word}",
-			".dsh-ttf-rowActions{flex:none;display:flex;align-items:center;gap:2px;margin-top:-4px}",
-			".dsh-ttf-markCell{flex:none;display:inline-flex;align-items:center;margin-top:3px;color:var(--dsw-alias-label-tertiary)}",
-			".dsh-ttf-markDone{flex:none;display:inline-flex;align-items:center;margin-top:3px;color:var(--dsw-alias-state-success-primary,#1a7f37)}",
-			".dsh-ttf-markMuted{flex:none;display:inline-flex;align-items:center;margin-top:3px;color:var(--dsw-alias-label-caption,#00000066)}",
-			// 正在运行的标记：就是原来那个虚线圆，让它匀速转起来。1s 一圈、线性、
-			// 无限，与内置待办面板 in_progress 的节奏一致。
-			"@keyframes dsh-ttf-spin{to{transform:rotate(360deg)}}",
-			".dsh-ttf-markSpin{animation:dsh-ttf-spin 1s linear infinite;transform-origin:50% 50%}",
-			".dsh-ttf-done{color:var(--dsw-alias-label-tertiary);text-decoration:line-through}",
-			// 三层缩进。
-			// 子节点：一条竖线 + 每个子节点一个拐角，把三层画成看得见的树。
-			".dsh-ttf-depth1,.dsh-ttf-depth2{margin-left:11px;padding-left:9px;border-left:1px solid var(--dsw-alias-border-l2)}",
-			'.dsh-ttf-depth1>.dsh-ttf-row:before,.dsh-ttf-depth2>.dsh-ttf-row:before{content:"";position:absolute;left:-9px;top:16px;width:8px;height:1px;background:var(--dsw-alias-border-l2)}',
-			// 详情里的每一块（说明 / 结果 / 表单）自成一块，块间留白 + 描边，分得开。
-			".dsh-ttf-detail>*+*{border-top:.5px solid var(--dsw-alias-border-l1);padding-top:6px}",
-			".dsh-ttf-tag{flex:none;margin-top:1px;border-radius:999px;padding:0 8px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-module-platform)}",
+			".dsh-ttf-rowHead{display:flex;align-items:center;gap:8px;min-width:0}",
+			".dsh-ttf-rowTitle{min-width:0;flex:1;white-space:pre-wrap;word-break:break-word;cursor:pointer}",
+			".dsh-ttf-rowIntro{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;white-space:pre-wrap;word-break:break-word}",
+			".dsh-ttf-pill{flex:none;border:.5px solid var(--dsw-alias-border-l4);border-radius:999px;padding:0 8px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}",
+			".dsh-ttf-pillDone{border-color:var(--dsw-alias-state-success-primary,#1a7f37);color:var(--dsw-alias-state-success-primary,#1a7f37)}",
+			".dsh-ttf-pillDropped{opacity:.6;text-decoration:line-through}",
+			".dsh-ttf-pillDraft{color:var(--dsw-alias-state-warning-primary,#a06800);border-color:var(--dsw-alias-state-warning-primary,#a06800)}",
+			".dsh-ttf-tag{flex:none;border-radius:999px;padding:0 8px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-module-platform)}",
 			".dsh-ttf-tagWarn{color:var(--dsw-alias-state-warning-primary,#a06800);background:var(--dsw-alias-state-warning-bg,#ffcc002e)}",
-			// 展开详情：说明、结果、完成表单。
 			".dsh-ttf-detail{display:flex;flex-direction:column;gap:6px;padding:2px 4px 4px}",
-			".dsh-ttf-detailLabel{margin-top:2px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}",
+			".dsh-ttf-detail>*+*{border-top:.5px solid var(--dsw-alias-border-l1);padding-top:6px}",
 			".dsh-ttf-detailText{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;white-space:pre-wrap;word-break:break-word}",
-			// 提交的结果：默认只占一行，点一下看全文。
-			".dsh-ttf-result{margin-top:2px;padding:4px 8px;border-radius:6px;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;white-space:pre-wrap;word-break:break-word;overflow:hidden;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical}",
-			".dsh-ttf-resultClick{cursor:pointer}",
-			".dsh-ttf-resultOpen{display:block;max-height:220px;overflow-y:auto}",
-			".dsh-ttf-form{margin:6px 0 2px}",
-			".dsh-ttf-input{box-sizing:border-box;width:100%;min-height:64px;padding:6px 8px;border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-family:ui-monospace,monospace;font-size:12px;line-height:18px;resize:vertical;outline:none}",
-			".dsh-ttf-input:focus{border-color:var(--dsw-alias-state-business-primary,#4d6bfe)}",
-			".dsh-ttf-input::placeholder{color:var(--dsw-alias-label-caption,#00000066)}",
-			".dsh-ttf-formBar{margin-top:6px;display:flex;align-items:center;gap:6px}",
-			".dsh-ttf-btn{border:.5px solid var(--dsw-alias-border-l4);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);border-radius:6px;padding:2px 10px;font-family:inherit;font-size:12px;line-height:20px;cursor:pointer}",
-			".dsh-ttf-btn:hover{background:var(--dsw-alias-interactive-bg-hover)}",
+			".dsh-ttf-list{margin:2px 0;padding-left:18px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}",
+			".dsh-ttf-btn{box-sizing:border-box;height:26px;padding:0 10px;border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;background:0 0;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;cursor:pointer;flex:none}",
+			".dsh-ttf-btn:hover:enabled{background:var(--dsw-alias-interactive-bg-hover)}",
 			".dsh-ttf-btn:disabled{opacity:.4;cursor:default}",
-			".dsh-ttf-btn:disabled:hover{background:var(--dsw-alias-bg-base)}",
-			".dsh-ttf-error{color:var(--dsw-alias-state-error-primary,#c00);font-size:12px;line-height:18px;white-space:pre-wrap}",
-			".dsh-ttf-hint{padding:4px 4px 6px 24px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}",
-			// 设置：两行开关，跟树共用同一张卡片。
+			".dsh-ttf-form{display:flex;flex-direction:column;gap:6px;margin:6px 0 2px}",
+			".dsh-ttf-input{box-sizing:border-box;width:100%;height:28px;padding:0 8px;border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;outline:none}",
+			".dsh-ttf-textarea{box-sizing:border-box;width:100%;min-height:64px;padding:6px 8px;border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-family:ui-monospace,monospace;font-size:12px;line-height:18px;resize:vertical;outline:none}",
+			".dsh-ttf-input:focus,.dsh-ttf-textarea:focus{border-color:var(--dsw-alias-state-business-primary,#4d6bfe)}",
+			".dsh-ttf-input::placeholder,.dsh-ttf-textarea::placeholder{color:var(--dsw-alias-label-caption,#00000066)}",
+			".dsh-ttf-formActions{margin-top:2px;display:flex;align-items:center;justify-content:flex-end;gap:6px}",
 			".dsh-ttf-settingsPage{display:flex;flex-direction:column;gap:10px;padding:4px 2px;max-width:640px}",
-			".dsh-ttf-settings{display:flex;flex-direction:column;gap:8px;padding:4px 4px 8px}",
-			".dsh-ttf-setting{display:flex;align-items:flex-start;gap:8px}",
+			".dsh-ttf-settings{display:flex;flex-direction:column;gap:12px}",
+			".dsh-ttf-setting{display:flex;align-items:flex-start;gap:10px}",
+			".dsh-ttf-settingText{display:flex;flex-direction:column;gap:2px;min-width:0}",
+			".dsh-ttf-settingName{color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px}",
+			".dsh-ttf-settingNote{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}",
 			".dsh-ttf-switch{box-sizing:border-box;flex:none;position:relative;width:32px;height:18px;margin-top:1px;padding:0;border:.5px solid var(--dsw-alias-border-l4);border-radius:999px;background:var(--dsw-alias-bg-module-platform);cursor:pointer}",
-			".dsh-ttf-switch:disabled{opacity:.4;cursor:default}",
-			".dsh-ttf-switchOn{border-color:var(--dsw-alias-state-business-primary,#4d6bfe);background:var(--dsw-alias-state-business-primary,#4d6bfe)}",
+			".dsh-ttf-switchOn{background:var(--dsw-alias-state-business-primary,#4d6bfe);border-color:transparent}",
 			".dsh-ttf-switchKnob{position:absolute;top:1px;left:1px;width:14px;height:14px;border-radius:999px;background:#fff;transition:left .12s}",
 			".dsh-ttf-switchOn .dsh-ttf-switchKnob{left:15px}",
-			".dsh-ttf-settingText{display:flex;flex-direction:column;gap:2px;min-width:0}",
-			".dsh-ttf-settingName{color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px}",
-			".dsh-ttf-settingNote{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}",
-		].join("");
+		].join("\n");
 
-		if (
-			typeof document !== "undefined" &&
-			document.querySelector("style[data-plugin-css=" + JSON.stringify(CSS_TAG) + "]") === null
-		) {
-			const tag = document.createElement("style");
-			tag.dataset.plugin = "dsh-tree-task-flow";
-			tag.dataset.pluginCss = CSS_TAG;
-			tag.textContent = CSS;
-			document.head.appendChild(tag);
-		}
-
-		// ---------------------------------------------------------------- 零件
-
-		/**
-		 * 节点状态标记：完成打勾、丢弃划掉、未完成画圈（当前节点用虚线圈，和内置待办一致）。
-		 *
-		 * 正在运行的那个圈还会匀速转起来——虚线一转就能看出这条路径还在推进。
-		 */
-		function StatusMark({ node, isCurrent }) {
-			if (node.status === "done") {
-				const check = icon("IconCheckOutline", 14);
-				return h("span", { className: "dsh-ttf-markDone" }, check === null ? "✓" : check);
+		function ensureStyles() {
+			const id = "dsh-tree-task-flow:css";
+			if (typeof document === "undefined" || document === null) return;
+			if (typeof document.createElement !== "function") return;
+			try {
+				// 自检里的假 document 只有 createElement：取不到已有节点就当作没有。
+				if (typeof document.getElementById === "function" && document.getElementById(id) !== null) return;
+				const style = document.createElement("style");
+				style.id = id;
+				style.textContent = CSS;
+				if (document.head && typeof document.head.appendChild === "function") {
+					document.head.appendChild(style);
+				}
+			} catch {
+				// 样式注入失败不该拖垮条目：没有样式也还能用。
 			}
-			if (node.status === "dropped") {
-				const close = icon("IconCloseOutline", 14);
-				return h("span", { className: "dsh-ttf-markMuted" }, close === null ? "×" : close);
-			}
-			const circle = { cx: 7, cy: 7, r: 5.2, stroke: "currentColor", strokeWidth: 1.2 };
-			if (isCurrent) circle.strokeDasharray = "2.4 2.4";
-			return h(
-				"span",
-				{ className: "dsh-ttf-markCell" },
-				h(
-					"svg",
-					{
-						width: 14,
-						height: 14,
-						viewBox: "0 0 14 14",
-						fill: "none",
-						"aria-hidden": true,
-						className: isCurrent ? "dsh-ttf-markSpin" : undefined,
-					},
-					h("circle", circle),
-				),
-			);
 		}
 
-		/**
-		 * 提交的结果。默认只占一行，点一下摊开看全文。
-		 *
-		 * 短到一行放得下的结果不给展开——点了也没变化，只是徒增噪音。
-		 */
-		function ResultText({ text, t }) {
-			const [open, setOpen] = useState(false);
-			const body = String(text ?? "");
-			const expandable = body.includes("\n") || body.length > 60;
-			return h(
-				"div",
-				{
-					className:
-						"dsh-ttf-result" +
-						(expandable ? " dsh-ttf-resultClick" : "") +
-						(open ? " dsh-ttf-resultOpen" : ""),
-					role: expandable ? "button" : undefined,
-					tabIndex: expandable ? 0 : undefined,
-					title: expandable ? t(open ? "action.collapseResult" : "action.expandResult") : undefined,
-					onClick: expandable
-						? () => setOpen(!open)
-						: undefined,
-				},
-				body,
-			);
+		// ---------------------------------------------------------------- 组件
+
+		/** 状态那枚小药丸。 */
+		function StatusPill({ row, t }) {
+			const key = statusKey(row.status);
+			const extra =
+				row.status === "done"
+					? " dsh-ttf-pillDone"
+					: row.status === "dropped"
+						? " dsh-ttf-pillDropped"
+						: "";
+			return h("span", { className: "dsh-ttf-pill" + extra }, t(key));
 		}
 
-		/** 提交结果的输入框。空文本提交不出去——host 也会拒绝，这里先挡住。 */
-		function CompleteForm({ onSubmit, onCancel, busy, error, t }) {
-			const [text, setText] = useState("");
+		/** 编辑态：标题 / 简介 / 详情 + 「确认变更」。 */
+		function EditForm({ row, onSubmit, onCancel, busy, t }) {
+			const [title, setTitle] = useState(row.title || "");
+			const [intro, setIntro] = useState(row.intro || "");
+			const [detail, setDetail] = useState(row.detail || "");
+			const [change, setChange] = useState("");
 			return h(
 				"div",
 				{ className: "dsh-ttf-form" },
-				h("textarea", {
+				h("input", {
 					className: "dsh-ttf-input",
-					value: text,
-					rows: 4,
-					placeholder: t("placeholder.result"),
-					onChange: (event) => setText(event.target.value),
+					value: title,
+					maxLength: 80,
+					placeholder: t("placeholder.title"),
+					onChange: (event) => setTitle(event.target.value),
 				}),
-				error ? h("div", { className: "dsh-ttf-error" }, error) : null,
+				h("input", {
+					className: "dsh-ttf-input",
+					value: intro,
+					maxLength: 240,
+					placeholder: t("placeholder.intro"),
+					onChange: (event) => setIntro(event.target.value),
+				}),
+				h("textarea", {
+					className: "dsh-ttf-textarea",
+					value: detail,
+					placeholder: t("placeholder.detail"),
+					onChange: (event) => setDetail(event.target.value),
+				}),
+				h("input", {
+					className: "dsh-ttf-input",
+					value: change,
+					placeholder: "这次改了什么（会写进版本历史）",
+					onChange: (event) => setChange(event.target.value),
+				}),
+				h("div", { className: "dsh-ttf-note" }, t("note.edit")),
 				h(
 					"div",
-					{ className: "dsh-ttf-formBar" },
+					{ className: "dsh-ttf-formActions" },
+					h("button", { type: "button", className: "dsh-ttf-btn", disabled: busy, onClick: onCancel }, t("action.cancel")),
 					h(
 						"button",
 						{
 							type: "button",
 							className: "dsh-ttf-btn",
-							disabled: busy || text.trim() === "",
-							onClick: () => onSubmit(text),
+							disabled: busy,
+							onClick: () =>
+								onSubmit({ title, intro, detail, change }),
 						},
-						t("action.submit"),
+						t("action.submitChange"),
 					),
-					h("button", { type: "button", className: "dsh-ttf-btn", disabled: busy, onClick: onCancel }, t("action.cancel")),
 				),
 			);
 		}
 
-		/**
-		 * 一个节点：一行标题 + 可展开的详情。
-		 *
-		 * 三层共用同一个组件——它们的字段与动作本来就一样，差别只有缩进，
-		 * 以及"这一层要不要给丢弃与删除按钮"（目标、任务、子任务都能丢、都能删）。
-		 */
-		function NodeRow({ node, depth, activeIds, openIds, checkpointId, canDrop, sessionId, reload, t }) {
-			const children = node.tasks || node.steps || [];
-			const canAct = node.status === "pending";
-			const isCurrent = activeIds.has(node.id);
-			const isCheckpoint = checkpointId === node.id;
-			const shouldOpen = openIds.has(node.id);
-			const expandable = children.length > 0 || node.detail !== undefined || node.result !== undefined;
+		/** 一条需求的详情（只读）。 */
+		function Detail({ row, t }) {
+			const tasks = row.tasks || [];
+			return h(
+				"div",
+				{ className: "dsh-ttf-detail" },
+				row.intro ? h("div", { className: "dsh-ttf-detailText" }, row.intro) : null,
+				row.detail
+					? h("div", null, h("div", { className: "dsh-ttf-section" }, t("label.detail")), h("div", { className: "dsh-ttf-detailText" }, row.detail))
+					: null,
+				row.missing && row.missing.length > 0
+					? h("div", { className: "dsh-ttf-note" }, t("label.missing") + "：" + row.missing.map((each) => each.id).join("、"))
+					: null,
+				row.pending
+					? h("div", { className: "dsh-ttf-note" }, t("label.pending") + "：" + (row.pending.change || "（未说明改了什么）"))
+					: null,
+				tasks.length > 0
+					? h(
+							"div",
+							null,
+							h("div", { className: "dsh-ttf-section" }, t("label.tasks")),
+							h(
+								"ul",
+								{ className: "dsh-ttf-list" },
+								tasks.map((task) =>
+									h(
+										"li",
+										{ key: task.id },
+										(task.status === "done" ? "✓ " : task.status === "dropped" ? "✗ " : "· ") + task.title,
+										(task.steps || []).length > 0
+											? h(
+													"ul",
+													{ className: "dsh-ttf-list" },
+													task.steps.map((step) =>
+														h(
+															"li",
+															{ key: step.id },
+															(step.status === "done" ? "✓ " : step.status === "dropped" ? "✗ " : "· ") + step.title,
+														),
+													),
+												)
+											: null,
+									),
+								),
+							),
+						)
+					: h("div", { className: "dsh-ttf-note" }, t("note.noTasks")),
+				row.result
+					? h("div", null, h("div", { className: "dsh-ttf-section" }, t("label.summary")), h("div", { className: "dsh-ttf-detailText" }, row.result))
+					: null,
+			);
+		}
 
-			// 默认只摊开"正在走的那条路径"（见 defaultOpenIds）：目标一路展开到当前子任务，
-			// 其余节点收起。否则一打开面板就是一整棵摊平的树，想找正在跑的那个得翻半天。
-			const [open, setOpen] = useState(shouldOpen);
-			const [composing, setComposing] = useState(false);
+		/** 一条需求。 */
+		function RequirementRow({ row, isCurrent, expanded, busy, onToggle, onStart, onArchive, onEdit, t }) {
+			const counts = countOf(row);
+			return h(
+				"div",
+				{ className: "dsh-ttf-row" },
+				h(
+					"div",
+					{ className: "dsh-ttf-rowHead" },
+					h(StatusPill, { row, t }),
+					h("span", { className: "dsh-ttf-tag" }, row.id),
+					h(
+						"span",
+						{ className: "dsh-ttf-rowTitle", onClick: onToggle, title: row.title },
+						row.title || "（还没有标题）",
+					),
+					isCurrent ? h("span", { className: "dsh-ttf-tag dsh-ttf-tagWarn" }, t("label.current")) : null,
+					counts.total > 0
+						? h("span", { className: "dsh-ttf-progress" }, counts.done + "/" + counts.total)
+						: null,
+					row.status === "pending" && !row.pending
+						? h(IconButton, { iconBase: "IconPlayOutline", label: t("action.start"), disabled: busy, onClick: onStart })
+						: null,
+					row.pending
+						? null
+						: h(IconButton, {
+								iconBase: row.archived ? "IconUndoOutline" : "IconArchiveOutline",
+								label: row.archived ? t("action.unarchive") : t("action.archive"),
+								disabled: busy,
+								onClick: onArchive,
+							}),
+					h(IconButton, {
+						iconBase: expanded ? "IconChevronUpOutline" : "IconChevronDownOutline",
+						label: expanded ? t("action.collapse") : t("action.open"),
+						onClick: onToggle,
+					}),
+				),
+				row.intro ? h("div", { className: "dsh-ttf-rowIntro" }, row.intro) : null,
+				expanded
+					? h(
+							"div",
+							null,
+							h(Detail, { row, t }),
+							row.pending
+								? null
+								: h(
+										"div",
+										{ className: "dsh-ttf-formActions" },
+										h("button", { type: "button", className: "dsh-ttf-btn", disabled: busy, onClick: onEdit }, t("action.edit")),
+									),
+						)
+					: null,
+			);
+		}
+
+		/** 新建需求：只产出草稿。 */
+		function DraftForm({ onSubmit, onCancel, busy, t }) {
+			const [title, setTitle] = useState("");
+			const [intro, setIntro] = useState("");
+			return h(
+				"div",
+				{ className: "dsh-ttf-form" },
+				h("input", {
+					className: "dsh-ttf-input",
+					value: title,
+					placeholder: t("placeholder.title"),
+					onChange: (event) => setTitle(event.target.value),
+				}),
+				h("input", {
+					className: "dsh-ttf-input",
+					value: intro,
+					placeholder: t("placeholder.intro"),
+					onChange: (event) => setIntro(event.target.value),
+				}),
+				h("div", { className: "dsh-ttf-note" }, t("note.draft")),
+				h(
+					"div",
+					{ className: "dsh-ttf-formActions" },
+					h("button", { type: "button", className: "dsh-ttf-btn", disabled: busy, onClick: onCancel }, t("action.cancel")),
+					h(
+						"button",
+						{
+							type: "button",
+							className: "dsh-ttf-btn",
+							disabled: busy || title.trim() === "",
+							onClick: () => onSubmit({ title, intro }),
+						},
+						t("action.add"),
+					),
+				),
+			);
+		}
+
+		/** 输入框上方的全宽条目。 */
+		function TaskTreeDock(props) {
+			const t = useT();
+			const sessionId = props.sessionId;
+			const [state, setState] = useState({ loading: true, data: null });
+			const [open, setOpen] = useState(false);
 			const [busy, setBusy] = useState(false);
-			const [error, setError] = useState(null);
+			const [note, setNote] = useState(null);
+			// 归档的**延迟渲染**：这里记的是"这一次打开面板期间点过的开关"，
+			// 它只改按钮文案，不改行所在的列表。下次打开面板时清空，行才真的搬家。
+			const [overrides, setOverrides] = useState({});
+			const [expandedId, setExpandedId] = useState(null);
+			const [editingId, setEditingId] = useState(null);
+			const [drafting, setDrafting] = useState(false);
 
-			// 活动节点在会话里往前走了，就把它摊开：当前任务不该埋在收起里。
+			const reload = useCallback(async () => {
+				if (!sessionId) {
+					setState({ loading: false, data: null });
+					return;
+				}
+				try {
+					const data = await api("/dsh-tree-task-flow/tree?sessionId=" + encodeURIComponent(sessionId));
+					setState({ loading: false, data });
+				} catch {
+					setState({ loading: false, data: null });
+				}
+			}, [sessionId]);
+
 			useEffect(() => {
-				if (shouldOpen) setOpen(true);
-			}, [shouldOpen]);
+				reload();
+			}, [reload]);
+
+			useEffect(() => {
+				if (!sessionId) return undefined;
+				const timer = setInterval(() => reload(), 4000);
+				return () => clearInterval(timer);
+			}, [sessionId, reload]);
+
+			useEffect(() => {
+				if (!note) return undefined;
+				const timer = setTimeout(() => setNote(null), 8000);
+				return () => clearTimeout(timer);
+			}, [note]);
+
+			// 打开面板 = 重新读一次，并把「延迟的归档」结算掉。
+			useEffect(() => {
+				if (!open) return;
+				setOverrides({});
+				reload();
+			}, [open, reload]);
 
 			const act = useCallback(
 				async (body) => {
 					setBusy(true);
-					setError(null);
+					setNote(null);
 					try {
-						await post(Object.assign({ sessionId }, body));
-						setComposing(false);
+						const result = await post(Object.assign({ sessionId }, body));
+						if (result && typeof result.message === "string" && result.message !== "") {
+							setNote(result.message);
+						}
 						await reload();
 					} catch (failure) {
-						setError(String((failure && failure.message) || failure));
+						setNote(String((failure && failure.message) || failure));
 					} finally {
 						setBusy(false);
 					}
@@ -591,152 +651,206 @@ window.__ModuleLoader__.load({
 				[sessionId, reload],
 			);
 
+			if (state.loading || !state.data) return null;
+
+			const data = state.data;
+			const lists = listsOf(data);
+			const total = lists.active.length + lists.archived.length + lists.drafts.length;
+			// 一条需求都没有的会话，一个像素都不占。
+			if (total === 0) return null;
+
+			const held = data.paused === true || data.stopped === true;
+			const currentId = data.current || null;
+			const currentRow = lists.active.find((row) => row.id === currentId) || null;
+			// 没有进行中的需求时，条上照**最近的那一条**显，状态也照它自己的来。
+			// 以前这里直接退回「待开始」，于是一条已经做完的需求在条上写着待开始、
+			// 点开明明是已完成——两处对不上（用户报的就是这个）。
+			const shownRow =
+				currentRow !== null ? currentRow : lists.active.length > 0 ? lists.active[lists.active.length - 1] : null;
+			const heading =
+				shownRow !== null
+					? shownRow.title
+					: lists.archived.length > 0
+						? t("label.archived")
+						: t("label.drafts");
+			const stateLabel = held
+				? t("state.paused")
+				: currentRow !== null
+					? t("state.running")
+					: shownRow !== null
+						? t(statusKey(shownRow.status))
+						: t("state.idle");
+			const counts = currentRow === null ? null : countOf(currentRow);
+			const listGlyph =
+				icon("IconChecklistOutline", 14) === null
+					? h("span", { className: "dsh-ttf-glyphFallback" }, "☰")
+					: icon("IconChecklistOutline", 14);
+
+			const rowOf = (row) => {
+				const shown = overrides[row.id];
+				return Object.assign({}, row, {
+					archived: typeof shown === "boolean" ? shown : row.archived === true,
+				});
+			};
+
+			const renderRow = (row) => {
+				const view = rowOf(row);
+				const expanded = expandedId === row.id || editingId === row.id;
+				return h(RequirementRow, {
+					key: row.id,
+					row: view,
+					isCurrent: row.id === currentId,
+					expanded,
+					busy,
+					t,
+					onToggle: () => {
+						setEditingId(null);
+						setExpandedId(expandedId === row.id ? null : row.id);
+					},
+					onStart: () => act({ action: "start", id: row.id }),
+					onArchive: () => {
+						const next = !(typeof overrides[row.id] === "boolean" ? overrides[row.id] : row.archived === true);
+						setOverrides(Object.assign({}, overrides, { [row.id]: next }));
+						setNote(t("note.archiveDeferred"));
+						act({ action: next ? "archive" : "unarchive", id: row.id });
+					},
+					onEdit: () => setEditingId(row.id),
+				});
+			};
+
 			return h(
 				"div",
-				{ className: "dsh-ttf-node dsh-ttf-depth" + depth },
+				{ className: "dsh-ttf-dock", "aria-label": t("nav") },
 				h(
 					"div",
-					{ className: "dsh-ttf-row" },
-					h(StatusMark, { node, isCurrent }),
+					{ className: "dsh-ttf-panel" },
 					h(
-						"span",
-						{ className: "dsh-ttf-rowTitle" + (node.status === "done" ? " dsh-ttf-done" : "") },
-						node.title,
-					),
-					isCurrent ? h("span", { className: "dsh-ttf-tag" }, t("label.current")) : null,
-					isCheckpoint ? h("span", { className: "dsh-ttf-tag dsh-ttf-tagWarn" }, t("label.checkpointHere")) : null,
-					h(
-						"span",
-						{ className: "dsh-ttf-rowActions" },
-						canAct
-							? h(IconButton, {
-									iconBase: "IconCheckOutline",
-									label: t("action.done"),
-									disabled: busy,
-									onClick: () => {
-										setComposing(true);
-										setOpen(true);
-									},
-								})
+						"div",
+						{ className: "dsh-ttf-bar" },
+						h("span", { className: "dsh-ttf-glyph", "aria-hidden": true }, listGlyph),
+						h("span", { className: "dsh-ttf-label" + (held ? " dsh-ttf-labelHeld" : "") }, stateLabel),
+						h("span", { className: "dsh-ttf-title", title: heading }, heading),
+						counts !== null && counts.total > 0
+							? h("span", { className: "dsh-ttf-progress" }, counts.done + "/" + counts.total)
 							: null,
-						canAct && canDrop
-							? h(IconButton, {
-									// 划掉 = 留个记号说"这件事不做了"，和树里已丢弃节点的 × 标记是同一个意思。
-									// 垃圾桶留给真正的删除（见下一个按钮）。
-									iconBase: "IconCloseOutline",
-									label: t("action.drop"),
-									disabled: busy,
-									onClick: () => {
-										if (window.confirm(t("confirm.drop", { title: node.title }))) {
-											act({ action: "drop", id: node.id });
-										}
-									},
-								})
-							: null,
-						// 删除对**任何状态**都开着：它就是用来清理写错/建重的内容的，
-						// 已完成的节点恰恰是最需要清掉的那种（结果记错了）。
-						canDrop
-							? h(IconButton, {
-									iconBase: "IconTrashOutline",
-									label: t("action.delete"),
-									disabled: busy,
-									onClick: () => {
-										if (window.confirm(t("confirm.delete", { title: node.title }))) {
-											act({ action: "delete", id: node.id });
-										}
-									},
-								})
-							: null,
-						expandable
-							? h(IconButton, {
-									iconBase: open ? "IconChevronDownOutline" : "IconChevronRightOutline",
-									label: open ? t("action.collapse") : t("action.expand"),
-									onClick: () => setOpen(!open),
-								})
-							: null,
-					),
-				),
-				open
-					? h(
+						h(
 							"div",
-							{ className: "dsh-ttf-detail" },
-							node.detail ? h("div", { className: "dsh-ttf-detailText" }, node.detail) : null,
-							node.result
-								? h(
-										"div",
-										null,
-										h(
+							{ className: "dsh-ttf-actions" },
+							h(IconButton, {
+								iconBase: held ? "IconPlayOutline" : "IconPauseOutline",
+								label: held ? t("action.resume") : t("action.pause"),
+								disabled: busy,
+								onClick: () => act({ action: held ? "resume" : "pause" }),
+							}),
+							h(IconButton, {
+								iconBase: open ? "IconChevronDownOutline" : "IconChevronUpOutline",
+								label: open ? t("action.collapse") : t("action.expand"),
+								onClick: () => setOpen(!open),
+							}),
+						),
+					),
+					note ? h("div", { className: "dsh-ttf-note" }, note) : null,
+					open
+						? h(
+								"div",
+								{ className: "dsh-ttf-body" },
+								held ? h("div", { className: "dsh-ttf-note" }, t("note.paused")) : null,
+
+								lists.active.length > 0
+									? h(
 											"div",
-											{ className: "dsh-ttf-detailLabel" },
-											t("label.result") + "（" + formatTime(node.result.at) + "）",
+											null,
+											h("div", { className: "dsh-ttf-section" }, t("label.requirements", { count: lists.active.length })),
+											lists.active.map((row) =>
+												editingId === row.id
+													? h(EditForm, {
+															key: row.id,
+															row,
+															busy,
+															t,
+															onCancel: () => setEditingId(null),
+															onSubmit: async (patch) => {
+																await act(Object.assign({ action: "pending", id: row.id }, patch));
+																setEditingId(null);
+															},
+														})
+													: renderRow(row),
+											),
+										)
+									: null,
+
+								lists.drafts.length > 0
+									? h(
+											"div",
+											null,
+											h("div", { className: "dsh-ttf-section" }, t("label.drafts") + " · " + lists.drafts.length),
+											lists.drafts.map((row) =>
+												h(
+													"div",
+													{ className: "dsh-ttf-row", key: row.id },
+													h(
+														"div",
+														{ className: "dsh-ttf-rowHead" },
+														h(StatusPill, { row, t }),
+														h("span", { className: "dsh-ttf-tag" }, row.id),
+														h("span", { className: "dsh-ttf-rowTitle" }, row.title || "（还没有标题）"),
+													),
+													h("div", { className: "dsh-ttf-note" }, t("note.draft")),
+												),
+											),
+										)
+									: null,
+
+								lists.archived.length > 0
+									? h(
+											"div",
+											null,
+											h("div", { className: "dsh-ttf-section" }, t("label.archived") + " · " + lists.archived.length),
+											lists.archived.map((row) => renderRow(row)),
+										)
+									: null,
+
+								drafting
+									? h(DraftForm, {
+											busy,
+											t,
+											onCancel: () => setDrafting(false),
+											onSubmit: async (patch) => {
+												await act(Object.assign({ action: "draft" }, patch));
+												setDrafting(false);
+											},
+										})
+									: h(
+											"div",
+											{ className: "dsh-ttf-formActions" },
+											h(
+												"button",
+												{ type: "button", className: "dsh-ttf-btn", disabled: busy, onClick: () => setDrafting(true) },
+												t("action.newRequirement"),
+											),
 										),
-										h(ResultText, { text: node.result.text, t }),
-									)
-								: h(
-										"div",
-										{ className: "dsh-ttf-detailLabel" },
-										t("label.result") + "：" + t("label.noResult"),
-									),
-							composing
-								? h(CompleteForm, {
-										t,
-										busy,
-										error,
-										onSubmit: (text) => act({ action: "done", id: node.id, result: text }),
-										onCancel: () => {
-											setComposing(false);
-											setError(null);
-										},
-									})
-								: null,
-							children.map((child) =>
-								h(NodeRow, {
-									key: child.id,
-									node: child,
-									depth: depth + 1,
-									activeIds,
-									openIds,
-									checkpointId,
-									canDrop: true,
-									sessionId,
-									reload,
-									t,
-								}),
-							),
-							children.length === 0 && depth < 2
-								? h("div", { className: "dsh-ttf-hint" }, t("hint.noChildren"))
-								: null,
-						)
-					: null,
+							)
+						: null,
+				),
 			);
 		}
 
-		// ---------------------------------------------------------------- 条目
-
 		/**
-		 * 设置里能改的开关。
+		 * 插件管理里本插件自己那一页（`plugins.bundle.config`）。
 		 *
-		 * 键必须与 `lib/settings.js` 的 `SETTING_KEYS` **一模一样**：对不上时接口会
-		 * 400 拒掉，而界面只会安静地什么都没发生，最难查。自检里有一条断言把两份
-		 * 名单对起来（`verify-settings.mjs`）。
+		 * 宿主给两类视图：`page` 是页面主体，`summary` 是这个 bundle 在列表里的
+		 * 一句话。bundle 的配置宿主只渲染 `page`，`summary` 一律返回 null——标题与
+		 * 描述由宿主从包的元数据里取，这里不重复一遍。
 		 *
-		 * 文案名就按 `setting.<键>` 拼，另配一条 `setting.<键>Note` 讲清楚它到底会做什么。
+		 * 判断视图与用 hook 的两件事分在两个组件里：同一个组件里先按 props 早退、
+		 * 再调 hook，视图一变 hook 数量就变，React 会直接抛错。
 		 */
-		const SETTING_ROWS = [
-			{ key: "autoContinue", note: "setting.autoContinueNote" },
-			{ key: "interruptRecovery", note: "setting.interruptRecoveryNote" },
-		];
+		function TaskTreeConfigEntry(ownerProps) {
+			if (ownerProps && ownerProps.view === "summary") return null;
+			return h(TaskTreeSettings);
+		}
 
-		/**
-		 * 设置面板里的那一页：两个开关。
-		 *
-		 * ★ 这一页挂在 **DSH 自己的设置面板**里（`settings.section` 槽），不在插件的
-		 * 任务条上。任务条是"看进度、按暂停"的地方；偏好属于设置，就该待在设置里。
-		 *
-		 * 数据走宿主那两个**与会话无关**的接口：读 `/dsh-tree-task-flow/settings`，
-		 * 写 `action: "setting"`。跟任务条不同，这里没有要盯的东西，所以不轮询：
-		 * 挂载时读一次，改完拿返回值就地更新。
-		 */
+		/** 配置页的正文：两个开关 + 读不到设置时的说明。 */
 		function TaskTreeSettings() {
 			const t = useT();
 			const [state, setState] = useState({ loading: true, data: null });
@@ -750,7 +864,6 @@ window.__ModuleLoader__.load({
 						const data = await api("/dsh-tree-task-flow/settings");
 						if (alive) setState({ loading: false, data });
 					} catch {
-						// 读不到就说读不到，别画一排骗人的开关。
 						if (alive) setState({ loading: false, data: null });
 					}
 				})();
@@ -763,11 +876,7 @@ window.__ModuleLoader__.load({
 				return h("div", { className: "dsh-ttf-settingsPage" }, h("div", { className: "dsh-ttf-settingNote" }, t("settings.loading")));
 			}
 			if (!state.data) {
-				return h(
-					"div",
-					{ className: "dsh-ttf-settingsPage" },
-					h("div", { className: "dsh-ttf-settingNote" }, t("settings.unavailable")),
-				);
+				return h("div", { className: "dsh-ttf-settingsPage" }, h("div", { className: "dsh-ttf-settingNote" }, t("settings.unavailable")));
 			}
 
 			const settings = state.data.settings ?? {};
@@ -791,9 +900,7 @@ window.__ModuleLoader__.load({
 				"div",
 				{ className: "dsh-ttf-settingsPage" },
 				h("div", { className: "dsh-ttf-settingNote" }, t("setting.note")),
-				state.data.enabled === false
-					? h("div", { className: "dsh-ttf-note" }, t("settings.off"))
-					: null,
+				state.data.enabled === false ? h("div", { className: "dsh-ttf-note" }, t("settings.off")) : null,
 				h(
 					"div",
 					{ className: "dsh-ttf-settings" },
@@ -828,200 +935,13 @@ window.__ModuleLoader__.load({
 			);
 		}
 
-		/**
-		 * 输入框上方的全宽条目。
-		 *
-		 * 收起时只有一行：图标 + 阶段标签 + 目标标题 + 进度，动作全在右侧的图标
-		 * 按钮里（暂停 / 继续、清空、展开）。展开才画整棵树，并限高滚动。
-		 *
-		 * 会话没有计划时返回 null：内置的 todo / goal 条目不该因为我而挪位。
-		 */
-		function TaskTreeDock(props) {
-			const t = useT();
-			const sessionId = props.sessionId;
-			const [state, setState] = useState({ loading: true });
-			const [open, setOpen] = useState(false);
-			const [busy, setBusy] = useState(false);
-
-			const reload = useCallback(async () => {
-				if (!sessionId) {
-					setState({ loading: false, empty: true });
-					return;
-				}
-				try {
-					const data = await api("/dsh-tree-task-flow/tree?sessionId=" + encodeURIComponent(sessionId));
-					setState({ loading: false, data });
-				} catch {
-					// 没有计划（404）是正常状态；真出错也不该占位。两种都当作"没有"。
-					setState({ loading: false, empty: true });
-				}
-			}, [sessionId]);
-
-			useEffect(() => {
-				reload();
-			}, [reload]);
-
-			// 模型随时会改计划，而条目没有推送通道，所以自己轮询。
-			// 4 秒一次，读的是插件自己的一个小 JSON。
-			useEffect(() => {
-				if (!sessionId) return undefined;
-				const timer = setInterval(() => {
-					reload();
-				}, 4000);
-				return () => clearInterval(timer);
-			}, [sessionId, reload]);
-
-			// 这次操作的结果说明（已放行 / 已唤醒 / 为什么没动）：恢复失败时用户最需要
-			// 的就是这句话，不能只留在接口的返回里。
-			const [note, setNote] = useState(null);
-			useEffect(() => {
-				if (!note) return undefined;
-				const timer = setTimeout(() => setNote(null), 8000);
-				return () => clearTimeout(timer);
-			}, [note]);
-
-			const act = useCallback(
-				async (body) => {
-					setBusy(true);
-					setNote(null);
-					try {
-						const result = await post(Object.assign({ sessionId }, body));
-						if (result && typeof result.message === "string" && result.message !== "") {
-							setNote(result.message);
-						}
-						await reload();
-					} finally {
-						setBusy(false);
-					}
-				},
-				[sessionId, reload],
-			);
-
-			if (state.loading || state.empty || !state.data) return null;
-
-			const data = state.data;
-			const goals = goalsOf(data);
-			if (goals.length === 0) return null;
-			// 一个会话可能有多个目标：条上给总数与合计进度，正文里把它们都列出来，
-			// 展开状态仍旧只摊开正在走的那条路径。
-			const stats = goals.reduce(
-				(acc, each) => {
-					const one = countNodes(each);
-					return { total: acc.total + one.total, done: acc.done + one.done };
-				},
-				{ total: 0, done: 0 },
-			);
-			const heading = goals.length === 1 ? goals[0].title : t("label.goals", { count: goals.length });
-			const current = currentLabel(data);
-			// 「被按住」有两条来源：插件闸门（paused）与人按过界面停止（stopped）。
-			// 对用户来说都是"停着呢，点继续就能接着跑"，所以合成一个状态展示。
-			const held = data.paused === true || data.stopped === true;
-			const stateLabel = held
-				? t("state.paused")
-				: data.checkpoint
-					? t("state.checkpoint")
-					: data.active === null
-						? t("state.done")
-						: t("state.running");
-			// 条首的清单图标；外壳连这个图标都没有时退回一个同类字符，别留空白。
-			const listIcon = icon("IconChecklistOutline", 14);
-			const listGlyph =
-				listIcon === null ? h("span", { className: "dsh-ttf-glyphFallback" }, "☰") : listIcon;
-
-			return h(
-				"div",
-				{ className: "dsh-ttf-dock", "aria-label": t("nav") },
-				h(
-					"div",
-					{ className: "dsh-ttf-panel" },
-					h(
-						"div",
-						{ className: "dsh-ttf-bar" },
-						h("span", { className: "dsh-ttf-glyph", "aria-hidden": true }, listGlyph),
-						h("span", { className: "dsh-ttf-label" + (held ? " dsh-ttf-labelHeld" : "") }, stateLabel),
-						h("span", { className: "dsh-ttf-title", title: heading }, heading),
-						// 一个都算不上（整棵树都被丢弃了）就不报分数：0/0 比不显示更让人费解。
-						// 有 open 节点时 total 一定 ≥ 1，所以这里不会把"当前节点"那截弄丢。
-						stats.total > 0
-							? h(
-									"span",
-									{ className: "dsh-ttf-progress" },
-									stats.done + "/" + stats.total + (current ? " · " + current : ""),
-								)
-							: null,
-						h(
-							"div",
-							{ className: "dsh-ttf-actions" },
-							h(IconButton, {
-								iconBase: held ? "IconPlayOutline" : "IconPauseOutline",
-								label: held ? t("action.resume") : t("action.pause"),
-								disabled: busy,
-								onClick: () => act({ action: held ? "resume" : "pause" }),
-							}),
-							h(IconButton, {
-								iconBase: "IconTrashOutline",
-								label: t("action.reset"),
-								disabled: busy,
-								onClick: () => {
-									if (window.confirm(t("confirm.reset"))) act({ action: "reset" });
-								},
-							}),
-							h(IconButton, {
-								iconBase: open ? "IconChevronDownOutline" : "IconChevronUpOutline",
-								label: open ? t("action.collapse") : t("action.expand"),
-								onClick: () => setOpen(!open),
-							}),
-						),
-					),
-					// 这次操作的结果与原因（已放行 / 已唤醒 / 为什么没动）。
-					note ? h("div", { className: "dsh-ttf-note" }, note) : null,
-					open
-						? h(
-								"div",
-								{ className: "dsh-ttf-body" },
-								data.checkpoint
-									? h(
-											"div",
-											{ className: "dsh-ttf-note" },
-											t("state.checkpoint") +
-												"：" +
-												data.checkpoint.label +
-												"「" +
-												data.checkpoint.title +
-												"」",
-											h("div", null, t("checkpoint.note", { title: data.checkpoint.title })),
-										)
-									: null,
-								held ? h("div", { className: "dsh-ttf-note" }, t("note.paused")) : null,
-								goals.map((each) =>
-									h(NodeRow, {
-										key: each.id,
-										node: each,
-										depth: 0,
-										activeIds: currentIds(data),
-										openIds: defaultOpenIds(data),
-										checkpointId: data.checkpoint ? data.checkpoint.id : null,
-										// 目标也能丢：丢弃会连同它下面的任务与子任务一起走。
-										canDrop: true,
-										sessionId,
-										reload,
-										t,
-									}),
-								),
-							)
-						: null,
-				),
-			);
-		}
-
 		// ---------------------------------------------------------------- 挂载
 
 		function apply(ctx) {
 			ctx.effect(() => ctx.locale.register(NS, { zh, en }), "dsh-tree-task-flow: dictionaries");
 			translate = ctx.locale.bind(NS);
+			ensureStyles();
 
-			// 输入框上方的条目。list 槽 + 自己的 id ⇒ 只会并列加在内置
-			// 的 queue / todo / goal 旁边，不会替换任何一个。
 			ctx.effect(
 				() =>
 					ctx.slots.inject("conversation.input.dock", () =>
@@ -1038,24 +958,19 @@ window.__ModuleLoader__.load({
 				"dsh-tree-task-flow: conversation dock",
 			);
 
-			// 设置面板里的那一页。用 `settings.section` 这个**列表槽**，所以它会作为
-			// 一行出现在 DSH 设置面板的导航里（跟「通用」「市场」并排），点开就是
-			// 那两个开关。槽没被组合出来时（比如没有设置面板的宿主）这里什么都不发生。
 			ctx.effect(
 				() =>
-					ctx.slots.inject("settings.section", () =>
+					ctx.slots.inject("plugins.bundle.config", () =>
 						ctx.slots.register(
 							{
-								name: "settings.section",
-								id: ENTRY_ID,
-								order: 60,
-								label: () => translate("settings.nav"),
+								name: "plugins.bundle.config",
+								key: BUNDLE_PACKAGE,
 								locale: NS,
 							},
-							TaskTreeSettings,
+							TaskTreeConfigEntry,
 						),
 					),
-				"dsh-tree-task-flow: settings section",
+				"dsh-tree-task-flow: 插件配置页",
 			);
 		}
 

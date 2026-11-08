@@ -414,11 +414,19 @@ console.log("\n接口的边界：");
     check("值不是布尔被拒", badValue.status === 400, JSON.stringify(badValue));
 
     const missing = await call(routeOf(harness, "/tree"), { url: "/dsh-tree-task-flow/tree" });
-    check("没有 sessionId 时没有计划可给（404）", missing.status === 404, JSON.stringify(missing));
+    // 会话没有需求不是错误：面板要靠这份数据决定「条要不要画出来」，
+    // 给 404 会让它每次都得把 404 当成空状态处理。现在一律 200 + 三个空列表。
+    check(
+      "没有 sessionId 时 /tree 给空列表而不是 404",
+      missing.status === 200 &&
+        missing.body.requirements.active.length === 0 &&
+        missing.body.requirements.drafts.length === 0,
+      JSON.stringify(missing),
+    );
 
-    // 设置面板那一页专用的与会话无关的接口。
+    // 插件配置页专用的与会话无关的接口。
     const settingsRoute = routeOf(harness, "/settings");
-    check("挂了 /settings 路由（设置面板不认会话，不能走 /tree）", settingsRoute !== undefined);
+    check("挂了 /settings 路由（插件配置页不认会话，不能走 /tree）", settingsRoute !== undefined);
 
     const page = await call(settingsRoute, { url: "/dsh-tree-task-flow/settings" });
     check("读得到设置", page.status === 200 && page.body?.ok === true, JSON.stringify(page));

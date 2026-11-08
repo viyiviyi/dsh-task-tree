@@ -12,16 +12,16 @@
 #    字段一次写全。可覆盖的字段见 DEFAULT_CONFIG：
 #
 #   enabled             总开关                  默认 true（写 false 关掉）
-#   autoContinue        是否允许自动续行        默认 false（设置面板里能改）
+#   autoContinue        是否允许自动续行        默认 false（插件页里能改）
 #   maxAutoRounds       连续自动续行轮次上限    默认 5
-#   interruptRecovery   意外中断是否自动拉起    默认 true（设置面板里能改）
+#   interruptRecovery   意外中断是否自动拉起    默认 true（插件页里能改）
 #   interruptDelaysMs   网络类中断拉起时刻      默认 null（= 1/5/10/30 分钟）
 #   promptOrder         工具说明段顺序          默认 1800
 #   rootDir             插件状态目录            默认 $DSH_HOME/dsh-task-tree
 #
 # 两个布尔开关（autoContinue / interruptRecovery）平时不用在这里改：
-# **DSH 设置面板**的导航里有一页叫「树形任务流」，点一下就行——**改完立刻生效、
-# 并且盖过这里写的值**（设置面板 > profile config > DEFAULT_CONFIG）。
+# **侧边栏「插件」页**里点开 `dsh-tree-task-flow` 这张卡，页面上就有这两个开关——
+# **改完立刻生效、并且盖过这里写的值**（插件页 > profile config > DEFAULT_CONFIG）。
 - insert:
     - id: task-tree
       name: 'dsh-tree-task-flow'

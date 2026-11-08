@@ -42,15 +42,18 @@ function check(name, cond, detail) {
   }
 }
 
-/** 新模型下的七个工具。 */
-const SEVEN_TOOLS = [
+/** 需求模型下的十个工具。 */
+const NINE_TOOLS = [
   "tree_task_status",
   "tree_task_create",
+  "tree_task_requirement",
+  "tree_task_start",
   "tree_task_plan",
   "tree_task_done",
   "tree_task_update",
   "tree_task_drop",
   "tree_task_delete",
+  "tree_task_note",
 ];
 
 /** 已移除的记忆三工具——再出现在任何地方都说明删漏了。 */
@@ -121,10 +124,10 @@ check(
   inject.length === 2 && inject.includes("systemPrompt") && inject.includes("tools"),
   JSON.stringify(inject),
 );
-check("注册了七个工具", names.length === 7, toolNames);
+check("注册了十个工具", names.length === 10, toolNames);
 check(
-  "七个工具正好是这一组",
-  SEVEN_TOOLS.every((want) => names.includes(want)),
+  "十个工具正好是这一组",
+  NINE_TOOLS.every((want) => names.includes(want)),
   toolNames,
 );
 check(
@@ -186,38 +189,43 @@ check(
 );
 check("文本以通配点名这组工具", SECTION_TEXT.includes("tree_task_*"));
 check(
-  "文本不逐个点名工具（用法交给各自的 description）",
-  !/tree_task_(create|update|drop|status|plan|done)/u.test(SECTION_TEXT),
+  "文本点名不超过六个具体工具（其余交给各自的 description）",
+  (SECTION_TEXT.match(/tree_task_[a-z]+/gu) ?? []).length <= 6,
+  String((SECTION_TEXT.match(/tree_task_[a-z]+/gu) ?? []).length),
+);
+check("文本点名了开工第一步的状态工具", SECTION_TEXT.includes("tree_task_status"));
+check(
+  "文本点名了建草稿与转正的两个入口",
+  SECTION_TEXT.includes("tree_task_create") && SECTION_TEXT.includes("tree_task_requirement"),
 );
 check("文本不再声称检查点会拒绝别的工具", !/一律被拒|只放行/u.test(SECTION_TEXT));
 check("文本不再讲资料注入", !/资料注入|注入资料/u.test(SECTION_TEXT));
 check(
-  "提示词教了分层：目标、任务、任务执行步骤三级",
-  SECTION_TEXT.includes("目标") &&
-    SECTION_TEXT.includes("任务、任务执行步骤三级") &&
-    !SECTION_TEXT.includes("任务交付节点"),
+  "提示词教了分层：需求、任务、步骤",
+  SECTION_TEXT.includes("需求") &&
+    SECTION_TEXT.includes("任务与步骤") &&
+    !SECTION_TEXT.includes("任务执行步骤三级"),
 );
 check(
-  "提示词给了两级拆分口径（任务按可独立交付分、步骤按一次性处理分）",
-  SECTION_TEXT.includes("可独立交付的节点分为多个任务") &&
-    SECTION_TEXT.includes("任务节点需要准确表述清楚需求") &&
-    SECTION_TEXT.includes("需一次性处理并交付产物") &&
-    SECTION_TEXT.includes("分为多个步骤"),
+  "段落不再重复拆分口径（任务归 plan、步骤归 plan）",
+  !SECTION_TEXT.includes("一件能独立验收") && !SECTION_TEXT.includes("交付物"),
+);
+check("段落不再重复 result 写法（归 done）", !SECTION_TEXT.includes("result"));
+check(
+  "段落讲了草稿的 update 与 confirm 两步",
+  SECTION_TEXT.includes("update") && SECTION_TEXT.includes("confirm"),
 );
 check(
-  "提示词讲了 result 写什么",
-  SECTION_TEXT.includes("result") &&
-    SECTION_TEXT.includes("提交内容可以是") &&
-    ["产物", "结论", "问题"].every((want) => SECTION_TEXT.includes(want)),
+  "段落要求每完成一个节点调用一次 done",
+  SECTION_TEXT.includes("每完成一个步骤") && SECTION_TEXT.includes("tree_task_done"),
 );
 check(
-  "提示词说明了过程上下文的下场（完成时被隐藏）",
-  SECTION_TEXT.includes("执行过程上下文将会在完成时被隐藏") &&
-    !SECTION_TEXT.includes("并自动收缩上下文"),
+  "段落不出现内部机制词（折叠、游标、边界、面板行为）",
+  ["折叠", "游标", "边界", "白占一个格子", "不叫醒"].every((gone) => !SECTION_TEXT.includes(gone)),
 );
 check(
   "段落是动作导向的：不解释机制、不定义概念",
-  !SECTION_TEXT.includes("折叠的边界") && !SECTION_TEXT.includes("它就是"),
+  !SECTION_TEXT.includes("它就是"),
 );
 check(
   "段落与内置段落同风格：无标题、无加粗、无列表",
@@ -228,6 +236,11 @@ check(
 check(
   "分层规则不掺臆造数字（不给步数/轮数的承诺）",
   !/\d+\s*~\s*\d+/u.test(SECTION_TEXT) && !/\d+\s*(steps|rounds)/iu.test(SECTION_TEXT),
+);
+check(
+  "段落不超过 340 字（模型每次请求都要付这份税）",
+  [...SECTION_TEXT].length <= 340,
+  String([...SECTION_TEXT].length),
 );
 check(
   "registerPromptSection 返回 disposer（供 effect 持有）",
@@ -344,8 +357,8 @@ check(
 const bare = makeHarness();
 apply(bare.ctx);
 check(
-  "不给 config 也注册七个工具",
-  bare.tools.map((tool) => tool.name).sort().join(", ") === SEVEN_TOOLS.slice().sort().join(", "),
+  "不给 config 也注册十个工具",
+  bare.tools.map((tool) => tool.name).sort().join(", ") === NINE_TOOLS.slice().sort().join(", "),
   bare.tools.map((tool) => tool.name).join(", "),
 );
 check("不给 config 也加一段提示词", bare.sections.length === 1, String(bare.sections.length));
